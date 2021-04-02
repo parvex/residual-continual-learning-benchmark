@@ -11,7 +11,7 @@ class CacheClassLabel(data.Dataset):
         super(CacheClassLabel, self).__init__()
         self.dataset = dataset
         self.labels = torch.LongTensor(len(dataset)).fill_(-1)
-        label_cache_filename = path.join(dataset.root, str(type(dataset))+'_'+str(len(dataset))+'.pth')
+        label_cache_filename = path.join(dataset.root, dataset.__module__+'_'+str(len(dataset))+'.pth')
         if path.exists(label_cache_filename):
             self.labels = torch.load(label_cache_filename)
         else:
