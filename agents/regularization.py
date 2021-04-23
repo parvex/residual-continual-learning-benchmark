@@ -376,6 +376,7 @@ class ResCL(NormalNN):
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         self.criterion_fn = self.combined_learn_loss
+        #todo
         self.model = CombinedResNet(self.source_model, self.target_model)
 
         super(ResCL, self).learn_batch(train_loader, val_loader)
