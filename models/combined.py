@@ -13,3 +13,6 @@ class CombinedResNet(nn.Module):
 
     def forward(self):
         print("todo")
+
+    def get_combined_network(self):
+        print("todo")
