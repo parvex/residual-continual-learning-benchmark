@@ -10,6 +10,7 @@ class CombinedResNet(nn.Module):
         self.target_model: PreActResNet_cifar = target_model
         self.alfa_source = None
         self.alfa_target = None
+        #todo detach freezed parameters
 
     def forward(self):
         print("todo")
