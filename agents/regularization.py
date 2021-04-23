@@ -369,13 +369,6 @@ class ResCL(NormalNN):
             # Residual Continual Learning algorithm
             self.residual_continual_learning(train_loader, val_loader)
 
-        # 2.Backup the weight of current task
-        task_param = {}
-        for n, p in self.params.items():
-            task_param[n] = p.clone().detach()
-
-        self.task_count += 1
-
     def residual_continual_learning(self, train_loader, val_loader):
         self.source_model = self.model
         self.target_model = copy.deepcopy(self.model)
