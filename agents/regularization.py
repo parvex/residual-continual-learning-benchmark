@@ -4,8 +4,11 @@ from enum import Enum
 import torch
 import random
 import torch.nn as nn
+
+from models.combined import CombinedResNet
 from .default import NormalNN
 import torch.nn.functional as F
+from models import combined
 
 class L2(NormalNN):
     """
@@ -331,12 +334,6 @@ class MAS(L2):
 
 #################################ZZSN
 
-class LearningState(Enum):
-    INIT = 1
-    FINETUNING = 2
-    LEARNING = 3
-
-
 class ResCL(NormalNN):
     """
     @misc{lee2020residual,
@@ -373,14 +370,16 @@ class ResCL(NormalNN):
         self.source_model = self.model
         self.target_model = copy.deepcopy(self.model)
 
-        self.learning_state = LearningState.FINETUNING
         # Now target_model will be fine tuned se learning model is changed
         self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
-        self.learning_state = LearningState.LEARNING
         self.criterion_fn = self.combined_learn_loss
+        self.model = CombinedResNet(self.source_model, self.target_model)
+
+        super(ResCL, self).learn_batch(train_loader, val_loader)
+        self.model = self.model.get_combined_network()
 
     def fine_tuning_loss(self, inputs, target):
         temp_logsoftmax_inputs = F.log_softmax(inputs/2)
