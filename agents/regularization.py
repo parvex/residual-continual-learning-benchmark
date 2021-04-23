@@ -355,6 +355,10 @@ class ResCL(NormalNN):
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
         self.task_count = 0
         self.learning_state = LearningState.INIT
+        self.lambd_dec = 0.0001
+        self.lambd = agent_config['lambd']
+        self.source_model = None
+        self.target_model = None
 
     def learn_batch(self, train_loader, val_loader=None):
 
@@ -388,41 +392,10 @@ class ResCL(NormalNN):
     def fine_tuning_loss(self, inputs, target):
         temp_logsoftmax_inputs = F.log_softmax(inputs/2)
         l_kl = F.kl_div(target, temp_logsoftmax_inputs, reduction='none') * (2**2) / target.shape[0]
-        norm = 0 #todo?
-        return l_kl + norm
+        norm = 0
+        for param in self.model.named_parameters():
+            norm += torch.norm(param, p=2) ** 2
+        return l_kl + norm * self.lambd_dec / 2
 
     def combined_learn_loss(self, inputs, target):
         print('todo')
-
-    # def criterion(self, inputs, targets, tasks, **kwargs):
-    #     loss = super(ResCL, self).criterion(inputs, targets, tasks, **kwargs)
-    #
-    #     # The inputs and targets could come from single task or a mix of tasks
-    #     # The network always makes the predictions with all its heads
-    #     # The criterion will match the head and task to calculate the loss.
-    #     if self.multihead:
-    #         loss = 0
-    #         for t, t_preds in inputs.items():
-    #             inds = [i for i in range(len(tasks)) if
-    #                     tasks[i] == t]  # The index of inputs that matched specific task
-    #             if len(inds) > 0:
-    #                 t_preds = t_preds[inds]
-    #                 t_target = targets[inds]
-    #                 loss += self.criterion_fn(t_preds, t_target) * len(inds)  # restore the loss from average
-    #         loss /= len(targets)  # Average the total loss by the mini-batch size
-    #     else:
-    #         pred = inputs['All']
-    #         if isinstance(self.valid_out_dim,
-    #                       int):  # (Not 'ALL') Mask out the outputs of unseen classes for incremental class scenario
-    #             pred = inputs['All'][:, :self.valid_out_dim]
-    #         loss = self.criterion_fn(pred, targets)
-    #
-    #
-    #     if self.learning_state == LearningState.FINETUNING:
-    #         print("todo")
-    #
-    #     if self.learning_state == LearningState.LEARNING:
-    #         print("todo")
-    #
-    #
-    #     return loss

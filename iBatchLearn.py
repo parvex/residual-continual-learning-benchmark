@@ -33,7 +33,8 @@ def run(args):
                     'out_dim':{'All':args.force_out_dim} if args.force_out_dim>0 else task_output_space,
                     'optimizer':args.optimizer,
                     'print_freq':args.print_freq, 'gpuid': args.gpuid,
-                    'reg_coef':args.reg_coef}
+                    'reg_coef':args.reg_coef,
+                    'lambd' : args.lambd}
     agent = agents.__dict__[args.agent_type].__dict__[args.agent_name](agent_config)
     print(agent.model)
     print('#parameter of model:',agent.count_parameter())
@@ -131,6 +132,8 @@ def get_args(argv):
     parser.add_argument('--repeat', type=int, default=1, help="Repeat the experiment N times")
     parser.add_argument('--incremental_class', dest='incremental_class', default=False, action='store_true',
                         help="The number of output node in the single-headed model increases along with new categories.")
+    parser.add_argument('--lambd', type=float, default=0.0001, help="Lambda operator for ResCL")
+
     args = parser.parse_args(argv)
     return args
 
