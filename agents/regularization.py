@@ -351,7 +351,7 @@ class ResCL(NormalNN):
         super(ResCL, self).__init__(agent_config)
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
         self.task_count = 0
-        self.learning_state = LearningState.INIT
+        # self.learning_state = LearningState.INIT
         self.lambd_dec = 0.0001
         self.lambd = agent_config['lambd']
         self.source_model = None
@@ -362,8 +362,8 @@ class ResCL(NormalNN):
         if(self.task_count == 0):
             # 1.Learn the parameters for 1. as normal ResNet
             super(ResCL, self).learn_batch(train_loader, val_loader)
-        else:
-            # Residual Continual Learning algorithm
+        # else:
+        #     # Residual Continual Learning algorithm
             self.residual_continual_learning(train_loader, val_loader)
 
     def residual_continual_learning(self, train_loader, val_loader):
@@ -371,16 +371,19 @@ class ResCL(NormalNN):
         self.target_model = copy.deepcopy(self.model)
 
         # Now target_model will be fine tuned se learning model is changed
-        self.criterion_fn = self.fine_tuning_loss
+        # self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
-        self.criterion_fn = self.combined_learn_loss
+        # self.criterion_fn = self.combined_learn_loss
         #todo
         self.model = CombinedResNet(self.source_model, self.target_model)
 
         super(ResCL, self).learn_batch(train_loader, val_loader)
         self.model = self.model.get_combined_network()
+
+        a = 1 + 3
+        print(a)
 
     def fine_tuning_loss(self, inputs, target):
         temp_logsoftmax_inputs = F.log_softmax(inputs/2)
