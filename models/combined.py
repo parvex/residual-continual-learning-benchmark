@@ -19,11 +19,14 @@ class CombinedResNet(nn.Module):
         self.alfa_target = self.get_alfa_empty_tensor(self.target_model, 0.5)
 
         self.combined_network = copy.deepcopy(self.target_model)
+        # całkowity inny rozmiar conv1 żeby dopasować alfy
         self.combined_network.conv1 = nn.Conv2d(self.target_model.conv1.in_channels,
                                                 self.target_model.conv1.out_channels,
                                                 kernel_size=self.target_model.conv1.kernel_size,
                                                 stride=self.target_model.conv1.stride,
                                                 padding=self.target_model.conv1.padding)
+
+        # nie ma nic w projekcie o kombinowaniu tego
         self.combined_network.bn_last = nn.BatchNorm2d(self.target_model.bn_last.num_features)
         self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
 
@@ -97,6 +100,7 @@ class CombinedResNet(nn.Module):
 
     def combine_layers(self, source_layer, target_layer, out, alfa_idx):
         out = self.combine_results(source_layer.bn1(out), target_layer.bn1(out), alfa_idx)
+        # nie wiem co z tym shortcutem
         # shortcut = source_layer.shortcut(out)
         out = F.relu(out)
         out = self.combine_results(source_layer.bn2(source_layer.conv1(out)), target_layer.bn2(target_layer.conv1(out)), alfa_idx + 1)
@@ -115,8 +119,9 @@ class CombinedResNet(nn.Module):
         self.fuze_stage(self.combined_network.stage2, self.source_model.stage2, self.target_model.stage2, alfa_idx)
         alfa_idx += 12
         self.fuze_stage(self.combined_network.stage3, self.source_model.stage3, self.target_model.stage3, alfa_idx)
-        alfa_idx += 12
-        self.fuze_stage(self.combined_network.stage4, self.source_model.stage4, self.target_model.stage4, alfa_idx)
+        # alfa_idx += 12
+        # self.fuze_stage(self.combined_network.stage4, self.source_model.stage4, self.target_model.stage4, alfa_idx)
+        return self.combined_network
 
     def fuze_stage(self, stage_combined, stage_source, stage_target, alfa_idx):
         for i in range(len(stage_source)):
@@ -130,7 +135,10 @@ class CombinedResNet(nn.Module):
         self.fuse_bn(combined_layer.bn1, source_layer.bn1, target_layer.bn1, alfa_idx)
         alfa_idx += 1
 
-        self.fuse_conv_bn_layer(combined_layer, source_layer, target_layer, alfa_idx)
+        # różny rozmiar conv1 i bn2 ( 32, 16, 3, 3) do 32 ( 16 != 32 )
+        # self.fuse_conv_bn_layer(combined_layer, source_layer, target_layer, alfa_idx)
+
+        self.fuse_bn(combined_layer.bn2, source_layer.bn2, target_layer.bn2, alfa_idx)
 
         alfa_idx += 1
         new_weight = self.combine_results(source_layer.conv2.weight, target_layer.conv2.weight, alfa_idx)
@@ -145,6 +153,7 @@ class CombinedResNet(nn.Module):
     def fuse_conv_bn_layer(self, combined_layer, source_layer, target_layer, alfa_idx):
         new_source_conv = self.fuse(source_layer.conv1, source_layer.bn2)
         new_target_conv = self.fuse(target_layer.conv1, target_layer.bn2)
+
         new_weight = self.combine_results(new_source_conv.weight, new_target_conv.weight, alfa_idx)
         combined_layer.conv1.weight = nn.Parameter(new_weight)
         combined_layer.bn2 = nn.BatchNorm2d(source_layer.num_features)

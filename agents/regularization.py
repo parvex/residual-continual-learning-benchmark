@@ -382,6 +382,9 @@ class ResCL(NormalNN):
 
         self.model = self.model.get_combined_network()
 
+        a = 1
+        print(a)
+
     def fine_tuning_loss(self, inputs, target):
         temp_logsoftmax_inputs = F.log_softmax(inputs/2)
         l_kl = F.kl_div(target, temp_logsoftmax_inputs, reduction='none') * (2**2) / target.shape[0]
