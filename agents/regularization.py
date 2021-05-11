@@ -376,14 +376,11 @@ class ResCL(NormalNN):
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         # self.criterion_fn = self.combined_learn_loss
-        #todo
-        self.model = CombinedResNet(self.source_model, self.target_model)
+        self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'])
 
         super(ResCL, self).learn_batch(train_loader, val_loader)
-        self.model = self.model.get_combined_network()
 
-        a = 1 + 3
-        print(a)
+        self.model = self.model.get_combined_network()
 
     def fine_tuning_loss(self, inputs, target):
         temp_logsoftmax_inputs = F.log_softmax(inputs/2)
