@@ -360,6 +360,7 @@ class ResCL(NormalNN):
     def learn_batch(self, train_loader, val_loader=None):
 
         if(self.task_count == 0):
+            self.log("ResCL learning init model")
             # 1.Learn the parameters for 1. as normal ResNet
             super(ResCL, self).learn_batch(train_loader, val_loader)
         # else:
@@ -371,13 +372,14 @@ class ResCL(NormalNN):
         self.target_model = copy.deepcopy(self.model)
 
         # Now target_model will be fine tuned se learning model is changed
+        self.log("ResCL fine tuning target model")
         # self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
+        self.log("ResCL learning combined source and target model")
         # self.criterion_fn = self.combined_learn_loss
         self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'])
-
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         self.model = self.model.get_combined_network()
