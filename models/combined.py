@@ -83,9 +83,9 @@ class CombinedResNet(nn.Module):
         alfa_key_bn1 = '.'.join([alfa_key, 'bn1'])
         out = self.combine_output(source_layer.bn1(x), target_layer.bn1(x), alfa_key_bn1)
 
-        alfa_key_shortcut = '.'.join([alfa_key, 'shortcut.0'])
-        shortcut = self.combine_output(source_layer.shortcut(out), target_layer.shortcut(out),
-                                       alfa_key_shortcut) if hasattr(source_layer, 'shortcut') else x
+        alfa_key_shortcut = '.'.join([alfa_key, 'shortcut'])
+        shortcut = self.forward_shortcut(out, source_layer.shortcut, target_layer.shortcut,
+                                         alfa_key_shortcut) if hasattr(source_layer, 'shortcut') else x
         out = F.relu(out)
 
         alfa_key_bn2 = '.'.join([alfa_key, 'bn2'])
@@ -97,6 +97,12 @@ class CombinedResNet(nn.Module):
         out = self.combine_output(source_layer.conv2(out), target_layer.conv2(out), alfa_key_conv2)
 
         out += shortcut
+        return out
+
+    def forward_shortcut(self, out, source_shortcut, target_shortcut, alfa_key):
+        for i in range(len(source_shortcut)):
+            alfa_key_shortcut = '.'.join([alfa_key, str(i)])
+            out = self.combine_output(source_shortcut[i](out), target_shortcut[i](out), alfa_key_shortcut)
         return out
 
     def get_combined_network(self):
@@ -111,12 +117,6 @@ class CombinedResNet(nn.Module):
         self.fuse_bn(self.combined_network.bn_last, self.source_model.bn_last, self.target_model.bn_last, 'bn_last')
 
         return self.combined_network
-
-    def combine_weights(self, source_weight, target_weight, alfa_key):
-        alfa_source = self.alfa_source[alfa_key] + 1
-        alfa_target = self.alfa_target[alfa_key]
-        result = source_weight * alfa_source[:, None, None, None] + target_weight * alfa_target[:, None, None, None]
-        return result
 
     def fuse_stage(self, stage_combined, stage_source, stage_target, stage_key):
         for i in range(len(stage_source)):
@@ -147,10 +147,16 @@ class CombinedResNet(nn.Module):
         self.fuse_conv(combined_layer.conv2, source_layer.conv2, target_layer.conv2, alfa_key_conv2)
 
     def fuse_bn(self, bn_combined, bn_source, bn_target, alfa_key):
-        new_weight = self.combine_weights(bn_source.weight, bn_target.weight, alfa_key)
+        new_weight = self.combine_weights_bn(bn_source.weight, bn_target.weight, alfa_key)
         bn_combined.weight = nn.Parameter(new_weight)
-        new_bias = self.combine_weights(bn_source.bias, bn_target.bias, alfa_key)
+        new_bias = self.combine_weights_bn(bn_source.bias, bn_target.bias, alfa_key)
         bn_combined.bias = nn.Parameter(new_bias)
+
+    def combine_weights_bn(self, source_weight, target_weight, alfa_key):
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        result = source_weight * alfa_source + target_weight * alfa_target
+        return result
 
     def fuse_shortcut(self, combined_shortcut, source_shortcut, target_shortcut, alfa_key):
         for i in range(len(combined_shortcut)):
@@ -158,8 +164,14 @@ class CombinedResNet(nn.Module):
             self.fuse_conv(combined_shortcut[i], source_shortcut[i], target_shortcut[i], alfa_key_shortcut)
 
     def fuse_conv(self, combined_conv, source_conv, target_conv, alfa_key):
-        new_weight = self.combine_weights(source_conv.weight, target_conv.weight, alfa_key)
+        new_weight = self.combine_weights_conv(source_conv.weight, target_conv.weight, alfa_key)
         combined_conv.weight = nn.Parameter(new_weight)
+
+    def combine_weights_conv(self, source_weight, target_weight, alfa_key):
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        result = source_weight * alfa_source[:, None, None, None] + target_weight * alfa_target[:, None, None, None]
+        return result
 
     def fuse_conv_bn_layer(self, combined_layer, source_layer, target_layer, alfa_key):
         new_source_conv = self.fuse(source_layer.conv1, source_layer.bn2)
@@ -190,4 +202,3 @@ class CombinedResNet(nn.Module):
         fused_conv.weight = nn.Parameter(w)
         fused_conv.bias = nn.Parameter(b)
         return fused_conv
-
