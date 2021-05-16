@@ -10,8 +10,9 @@ class CombinedResNet(nn.Module):
         self.alfa_source = None
         self.alfa_target = None
 
-    def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar, num_classes: int):
+    def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar, num_classes: int, gpu: bool):
         super(CombinedResNet, self).__init__()
+        self.gpu = gpu
         self.source_model: PreActResNet_cifar = source_model
         self.freeze_model(self.source_model)
         self.target_model: PreActResNet_cifar = target_model
@@ -36,6 +37,8 @@ class CombinedResNet(nn.Module):
                 alfa = torch.ones(size_of_layer) * value
                 last_dot_index = name.rfind('.')
                 name = name[:last_dot_index]
+                if self.gpu:
+                    alfa = alfa.cuda()
                 alfas[name] = alfa
         return alfas
 
@@ -187,3 +190,4 @@ class CombinedResNet(nn.Module):
         fused_conv.weight = nn.Parameter(w)
         fused_conv.bias = nn.Parameter(b)
         return fused_conv
+

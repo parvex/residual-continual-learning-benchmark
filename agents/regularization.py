@@ -360,8 +360,9 @@ class ResCL(NormalNN):
     def learn_batch(self, train_loader, val_loader=None):
 
         if(self.task_count == 0):
+            self.log("ResCL learning init model")
             # 1.Learn the parameters for 1. as normal ResNet
-            super(ResCL, self).learn_batch(train_loader, val_loader)
+            #super(ResCL, self).learn_batch(train_loader, val_loader)
         # else:
         #     # Residual Continual Learning algorithm
             self.residual_continual_learning(train_loader, val_loader)
@@ -370,14 +371,18 @@ class ResCL(NormalNN):
         self.source_model = self.model
         self.target_model = copy.deepcopy(self.model)
 
+
         # Now target_model will be fine tuned se learning model is changed
+        self.log("ResCL fine tuning target model")
         # self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
-        super(ResCL, self).learn_batch(train_loader, val_loader)
+        self.move_to_device()
+        #super(ResCL, self).learn_batch(train_loader, val_loader)
 
+        self.log("ResCL learning combined source and target model")
         # self.criterion_fn = self.combined_learn_loss
-        self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'])
-
+        self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'], self.gpu)
+        self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         self.model = self.model.get_combined_network()
@@ -395,3 +400,7 @@ class ResCL(NormalNN):
 
     def combined_learn_loss(self, inputs, target):
         print('todo')
+
+    def move_to_device(self):
+        if self.gpu:
+            self.model.cuda()
