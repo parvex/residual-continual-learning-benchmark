@@ -19,15 +19,6 @@ class CombinedResNet(nn.Module):
         self.alfa_target = self.get_alfa_empty_tensor(self.target_model, 0.5)
 
         self.combined_network = copy.deepcopy(self.target_model)
-        # całkowity inny rozmiar conv1 żeby dopasować alfy
-        self.combined_network.conv1 = nn.Conv2d(self.target_model.conv1.in_channels,
-                                                self.target_model.conv1.out_channels,
-                                                kernel_size=self.target_model.conv1.kernel_size,
-                                                stride=self.target_model.conv1.stride,
-                                                padding=self.target_model.conv1.padding)
-
-        # nie ma nic w projekcie o kombinowaniu tego
-        self.combined_network.bn_last = nn.BatchNorm2d(self.target_model.bn_last.num_features)
         self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
 
     def freeze_model(self, model):
@@ -36,33 +27,40 @@ class CombinedResNet(nn.Module):
             layer.detach()
 
     def get_alfa_empty_tensor(self, model, value):
-        alfas = []
+        alfas = {}
         for param in model.named_parameters():
             name = param[0]
             layer = param[1]
-            if 'bn1' in name and 'weight' in name or 'conv1' in name and 'stage' in name or 'conv2' in name:
+            if self.alfa_condition(name):
                 size_of_layer = layer.shape[0]
-                alfa = torch.ones([size_of_layer, 1, 1]) * value
-                alfas.append(alfa)
+                alfa = torch.ones(size_of_layer) * value
+                last_dot_index = name.rfind('.')
+                name = name[:last_dot_index]
+                alfas[name] = alfa
         return alfas
 
-    def forward(self, x):
-        alfa_idx = 0
-        # out = self.combine_results(self.source_model.conv1(x), self.target_model.conv1(x), alfa_idx)
-        out = self.combined_network.conv1(x)
+    def alfa_condition(self, name):
+        return 'bn1.weight' in name or 'bn2.weight' in name or 'conv2' in name or (
+                'conv1' in name and not 'stage' in name) or 'shortcut' in name or 'bn_last.weight' in name
 
-        out = self.forward_stage(self.source_model.stage1, self.target_model.stage1, out, alfa_idx)
-        alfa_idx += 12
-        out = self.forward_stage(self.source_model.stage2, self.target_model.stage2, out, alfa_idx)
-        alfa_idx += 12
-        out = self.forward_stage(self.source_model.stage3, self.target_model.stage3, out, alfa_idx)
-        alfa_idx += 12
-        # for sure that bn_last should be created in costructor?
-        out = F.relu(self.combined_network.bn_last(out))
+    def forward(self, x):
+        out = self.combine_output(self.source_model.conv1(x), self.target_model.conv1(x), 'conv1')
+
+        out = self.forward_stage(self.source_model.stage1, self.target_model.stage1, out, 'stage1')
+
+        out = self.forward_stage(self.source_model.stage2, self.target_model.stage2, out, 'stage2')
+
+        out = self.forward_stage(self.source_model.stage3, self.target_model.stage3, out, 'stage3')
+
+        out = F.relu(self.combine_output(self.source_model.bn_last(out), self.target_model.bn_last(out), 'bn_last'))
         out = F.avg_pool2d(out, 8)
-        # and linear?
         out = self.logits(out.view(out.size(0), -1))
         return out
+
+    def combine_output(self, source_output, target_output, alfa_key):
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        return source_output * alfa_source[None, :, None, None] + target_output * alfa_target[None, :, None, None]
 
     def logits(self, x):
         outputs = {}
@@ -70,95 +68,102 @@ class CombinedResNet(nn.Module):
             outputs[task] = func(x)
         return outputs
 
-    def combine_results(self, source, target, alfa_idx):
-        alfa_source = self.alfa_source[alfa_idx]
-        alfa_target = self.alfa_target[alfa_idx]
-        # batch norm
-        if len(source.shape) == 1:
-            alfa_source_corrected = alfa_source.view(alfa_source.size(0))
-            alfa_target_corrected = alfa_target.view(alfa_target.size(0))
-        # conv
-        else:
-            size_one = source.shape[-1]
-            size_two = source.shape[-2]
-            alfa_source_corrected = alfa_source.expand(-1, size_one, size_two)
-            alfa_target_corrected = alfa_target.expand(-1, size_one, size_two)
-
-        return CombinedResNet.calculate_with_alfas(source, target, alfa_source_corrected, alfa_target_corrected)
-
-    @staticmethod
-    def calculate_with_alfas(source, target, alfa_source, alfa_target):
-        return (1 + alfa_source) * source + alfa_target * target
-
-    def forward_stage(self, stage_source, stage_target, out, alfa_idx):
+    def forward_stage(self, stage_source, stage_target, out, stage_key):
         for i in range(len(stage_source)):
             source_layer = stage_source[i]
             target_layer = stage_target[i]
-            out = self.combine_layers(source_layer, target_layer, out, alfa_idx)
-            alfa_idx += 3
+            alfa_key = '.'.join([stage_key, str(i)])
+            out = self.forward_layers(source_layer, target_layer, out, alfa_key)
         return out
 
-    def combine_layers(self, source_layer, target_layer, out, alfa_idx):
-        out = self.combine_results(source_layer.bn1(out), target_layer.bn1(out), alfa_idx)
-        # nie wiem co z tym shortcutem
-        # shortcut = source_layer.shortcut(out)
+    def forward_layers(self, source_layer, target_layer, x, alfa_key):
+        alfa_key_bn1 = '.'.join([alfa_key, 'bn1'])
+        out = self.combine_output(source_layer.bn1(x), target_layer.bn1(x), alfa_key_bn1)
+
+        alfa_key_shortcut = '.'.join([alfa_key, 'shortcut.0'])
+        shortcut = self.combine_output(source_layer.shortcut(out), target_layer.shortcut(out),
+                                       alfa_key_shortcut) if hasattr(source_layer, 'shortcut') else x
         out = F.relu(out)
-        out = self.combine_results(source_layer.bn2(source_layer.conv1(out)), target_layer.bn2(target_layer.conv1(out)), alfa_idx + 1)
+
+        alfa_key_bn2 = '.'.join([alfa_key, 'bn2'])
+        out = self.combine_output(source_layer.bn2(source_layer.conv1(out)), target_layer.bn2(target_layer.conv1(out)),
+                                  alfa_key_bn2)
         out = F.relu(out)
-        out = self.combine_results(source_layer.conv2(out), target_layer.conv2(out), alfa_idx + 2)
-        # out += shortcut
+
+        alfa_key_conv2 = '.'.join([alfa_key, 'conv2'])
+        out = self.combine_output(source_layer.conv2(out), target_layer.conv2(out), alfa_key_conv2)
+
+        out += shortcut
         return out
 
     def get_combined_network(self):
-        alfa_idx = 0
-        # new_conv1_weights = self.combine_results(self.source_model.conv1.weight, self.target_model.conv1.weight, alfa_idx)
-        # self.combined_network.conv1.weight = new_conv1_weights
+        self.fuse_conv(self.combined_network.conv1, self.source_model.conv1, self.target_model.conv1, 'conv1')
 
-        self.fuze_stage(self.combined_network.stage1, self.source_model.stage1, self.target_model.stage1, alfa_idx)
-        alfa_idx += 12
-        self.fuze_stage(self.combined_network.stage2, self.source_model.stage2, self.target_model.stage2, alfa_idx)
-        alfa_idx += 12
-        self.fuze_stage(self.combined_network.stage3, self.source_model.stage3, self.target_model.stage3, alfa_idx)
-        # alfa_idx += 12
-        # self.fuze_stage(self.combined_network.stage4, self.source_model.stage4, self.target_model.stage4, alfa_idx)
+        self.fuse_stage(self.combined_network.stage1, self.source_model.stage1, self.target_model.stage1, 'stage1')
+
+        self.fuse_stage(self.combined_network.stage2, self.source_model.stage2, self.target_model.stage2, 'stage2')
+
+        self.fuse_stage(self.combined_network.stage3, self.source_model.stage3, self.target_model.stage3, 'stage3')
+
+        self.fuse_bn(self.combined_network.bn_last, self.source_model.bn_last, self.target_model.bn_last, 'bn_last')
+
         return self.combined_network
 
-    def fuze_stage(self, stage_combined, stage_source, stage_target, alfa_idx):
+    def combine_weights(self, source_weight, target_weight, alfa_key):
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        result = source_weight * alfa_source[:, None, None, None] + target_weight * alfa_target[:, None, None, None]
+        return result
+
+    def fuse_stage(self, stage_combined, stage_source, stage_target, stage_key):
         for i in range(len(stage_source)):
             source_layer = stage_source[i]
             target_layer = stage_target[i]
             combined_layer = stage_combined[i]
-            self.fuze_layers(combined_layer, source_layer, target_layer, alfa_idx)
-            alfa_idx += 3
+            alfa_key = '.'.join([stage_key, str(i)])
+            self.fuse_layers(combined_layer, source_layer, target_layer, alfa_key)
 
-    def fuze_layers(self, combined_layer, source_layer, target_layer, alfa_idx):
-        self.fuse_bn(combined_layer.bn1, source_layer.bn1, target_layer.bn1, alfa_idx)
-        alfa_idx += 1
+    def fuse_layers(self, combined_layer, source_layer, target_layer, alfa_key):
+        alfa_key_bn1 = '.'.join([alfa_key, 'bn1'])
+        self.fuse_bn(combined_layer.bn1, source_layer.bn1, target_layer.bn1, alfa_key_bn1)
 
-        # różny rozmiar conv1 i bn2 ( 32, 16, 3, 3) do 32 ( 16 != 32 )
-        # self.fuse_conv_bn_layer(combined_layer, source_layer, target_layer, alfa_idx)
+        alfa_key_shortcut = '.'.join([alfa_key, 'shortcut'])
+        if alfa_key_shortcut in self.alfa_source.keys():
+            self.fuse_shortcut(combined_layer.shortcut, source_layer.shortcut, target_layer.shortcut, alfa_key_shortcut)
 
-        self.fuse_bn(combined_layer.bn2, source_layer.bn2, target_layer.bn2, alfa_idx)
+        # with fuse function
+        # alfa_key_conv_bn = '.'.join([alfa_key, 'bn2'])
+        # self.fuse_conv_bn_layer(combined_layer, source_layer, target_layer, alfa_key_conv_bn)
 
-        alfa_idx += 1
-        new_weight = self.combine_results(source_layer.conv2.weight, target_layer.conv2.weight, alfa_idx)
-        combined_layer.conv2.weight = nn.Parameter(new_weight)
+        # without fuse function
+        alfa_key_conv_bn = '.'.join([alfa_key, 'bn2'])
+        self.fuse_conv(combined_layer.conv1, source_layer.conv1, target_layer.conv1, alfa_key_conv_bn)
+        self.fuse_bn(combined_layer.bn2, source_layer.bn2, target_layer.bn2, alfa_key_conv_bn)
 
-    def fuse_bn(self, bn_combined, bn_source, bn_target, alfa_idx):
-        new_weight = self.combine_results(bn_source.weight, bn_target.weight, alfa_idx)
+        alfa_key_conv2 = '.'.join([alfa_key, 'conv2'])
+        self.fuse_conv(combined_layer.conv2, source_layer.conv2, target_layer.conv2, alfa_key_conv2)
+
+    def fuse_bn(self, bn_combined, bn_source, bn_target, alfa_key):
+        new_weight = self.combine_weights(bn_source.weight, bn_target.weight, alfa_key)
         bn_combined.weight = nn.Parameter(new_weight)
-        new_bias = self.combine_results(bn_source.bias, bn_target.bias, alfa_idx)
+        new_bias = self.combine_weights(bn_source.bias, bn_target.bias, alfa_key)
         bn_combined.bias = nn.Parameter(new_bias)
 
-    def fuse_conv_bn_layer(self, combined_layer, source_layer, target_layer, alfa_idx):
+    def fuse_shortcut(self, combined_shortcut, source_shortcut, target_shortcut, alfa_key):
+        for i in range(len(combined_shortcut)):
+            alfa_key_shortcut = '.'.join([alfa_key, str(i)])
+            self.fuse_conv(combined_shortcut[i], source_shortcut[i], target_shortcut[i], alfa_key_shortcut)
+
+    def fuse_conv(self, combined_conv, source_conv, target_conv, alfa_key):
+        new_weight = self.combine_weights(source_conv.weight, target_conv.weight, alfa_key)
+        combined_conv.weight = nn.Parameter(new_weight)
+
+    def fuse_conv_bn_layer(self, combined_layer, source_layer, target_layer, alfa_key):
         new_source_conv = self.fuse(source_layer.conv1, source_layer.bn2)
         new_target_conv = self.fuse(target_layer.conv1, target_layer.bn2)
 
-        new_weight = self.combine_results(new_source_conv.weight, new_target_conv.weight, alfa_idx)
-        combined_layer.conv1.weight = nn.Parameter(new_weight)
+        self.fuse_conv(combined_layer.conv1, new_source_conv, new_target_conv, alfa_key)
         combined_layer.bn2 = nn.BatchNorm2d(source_layer.num_features)
-        combined_layer.bn2.weight.detach()
-        combined_layer.bn2.bias.detach()
 
     @staticmethod
     def fuse(conv, bn):
