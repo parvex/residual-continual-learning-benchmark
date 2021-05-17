@@ -425,12 +425,13 @@ class ResCL(NormalNN):
         return l_kl + l2_reg
 
     def combined_learn_loss(self, pred: Tensor, target: Tensor):
-        combined_ls_preds = F.log_softmax(pred / 2, dim=1)
+        combined_source_preds = F.softmax(pred[:, :(self.valid_out_dim - self.split_size)] / 2, dim=1)
+        combined_target_preds = F.softmax(pred[:, -self.split_size:] / 2, dim=1)
         source_ls_preds = F.log_softmax(self.source_pred[:, :(self.valid_out_dim - self.split_size)] / 2, dim=1)
         target_ls_preds = F.log_softmax(self.target_pred[:, -self.split_size:] / 2, dim=1)
 
-        l_kl_s = F.kl_div(source_ls_preds, combined_ls_preds[:, :(self.valid_out_dim - self.split_size)], reduction='sum') * (2 ** 2) / target.shape[0]
-        l_kl_t = F.kl_div(target_ls_preds, combined_ls_preds[:, -self.split_size:], reduction='sum') * (2 ** 2) / target.shape[0]
+        l_kl_s = F.kl_div(source_ls_preds, combined_source_preds, reduction='sum') * (2 ** 2) / target.shape[0]
+        l_kl_t = F.kl_div(target_ls_preds, combined_target_preds, reduction='sum') * (2 ** 2) / target.shape[0]
         l2_reg = self.calculate_l2()
         alfa_l1_reg = self.calculate_alfa_l1()
         return l_kl_s + l_kl_t + l2_reg + alfa_l1_reg
