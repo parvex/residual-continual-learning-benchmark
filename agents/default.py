@@ -187,7 +187,7 @@ class NormalNN(nn.Module):
                 target = target.detach()
 
                 # measure accuracy and record loss
-                acc = accumulate_acc(output, target, task, acc, self.valid_out_dim)
+                acc = accumulate_acc(output, target, task, acc)
                 losses.update(loss, input.size(0))
 
                 batch_time.update(batch_timer.toc())  # measure elapsed time
@@ -243,13 +243,10 @@ class NormalNN(nn.Module):
             self.model = torch.nn.DataParallel(self.model, device_ids=self.config['gpuid'], output_device=self.config['gpuid'][0])
         return self
 
-def accumulate_acc(output, target, task, meter, valid_out_dim = 0):
+def accumulate_acc(output, target, task, meter):
     if 'All' in output.keys():
         # Single - headed model
-        if valid_out_dim > 0:
-            meter.update(accuracy(output['All'][:,:valid_out_dim], target), len(target))
-        else:
-            meter.update(accuracy(output['All'], target), len(target))
+        meter.update(accuracy(output['All'], target), len(target))
 
     else:  # outputs from multi-headed (multi-task) model
         for t, t_out in output.items():
