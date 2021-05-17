@@ -16,8 +16,8 @@ class CombinedResNet(nn.Module):
         self.source_model: PreActResNet_cifar = source_model
         self.freeze_model(self.source_model)
         self.target_model: PreActResNet_cifar = target_model
-        self.alfa_source = self.get_alfa_empty_tensor(self.source_model, -0.5)
-        self.alfa_target = self.get_alfa_empty_tensor(self.target_model, 0.5)
+        self.alfa_source = self.get_alfa_empty_tensor(self.source_model, -0.5, 'source')
+        self.alfa_target = self.get_alfa_empty_tensor(self.target_model, 0.5, 'target')
 
         self.combined_network = copy.deepcopy(self.target_model)
         self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
@@ -27,7 +27,7 @@ class CombinedResNet(nn.Module):
             layer = param[1]
             layer.detach()
 
-    def get_alfa_empty_tensor(self, model, value):
+    def get_alfa_empty_tensor(self, model, value, model_name):
         alfas = {}
         for param in model.named_parameters():
             name = param[0]
@@ -38,7 +38,9 @@ class CombinedResNet(nn.Module):
                 last_dot_index = name.rfind('.')
                 name = name[:last_dot_index]
                 if self.gpu:
-                    alfa = alfa.cuda()
+                    alfa = torch.nn.Parameter(alfa.cuda())
+                    param_name = ('alfa.' + model_name + '.' + name).replace('.' , '-')
+                    self.register_parameter(param_name, alfa)
                 alfas[name] = alfa
         return alfas
 
