@@ -388,6 +388,7 @@ class ResCL(NormalNN):
         del self.criterion_fn
         self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
+        self.params = {n: p for n, p in self.target_model.named_parameters() if p.requires_grad}
         self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
@@ -395,6 +396,12 @@ class ResCL(NormalNN):
         del self.criterion_fn
         self.criterion_fn = self.combined_learn_loss
         self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'], self.gpu)
+        # ustawianie paramterow wraz z funckją, bo alfy się nie uczą, ale czy na pewno
+        model_params = {n: p for n, p in self.model.target_model.named_parameters()}
+        alfa_source_params = {'alfa_source.' + key: self.model.alfa_source[key] for key in self.model.alfa_source}
+        alfa_target_params = {'alfa_target.' + key: self.model.alfa_target[key] for key in self.model.alfa_target}
+        self.params = dict(model_params, **alfa_source_params)
+        self.params.update(alfa_target_params)
         self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
@@ -417,7 +424,7 @@ class ResCL(NormalNN):
         return loss.detach(), out
 
     def fine_tuning_loss(self, pred: Tensor, target: Tensor) -> Tensor:
-        #take few last columns (new task specific)
+        # take few last columns (new task specific)
         logsoftmax_preds = F.log_softmax(pred[:, -self.split_size:] / 2, dim=1)
         target_probs = torch.nn.functional.one_hot(target).to(torch.float32)[:, -self.split_size:]
         l_kl = F.kl_div(logsoftmax_preds, target_probs, reduction='sum') * (2 ** 2) / target.shape[0]
@@ -436,7 +443,6 @@ class ResCL(NormalNN):
         alfa_l1_reg = self.calculate_alfa_l1()
         return l_kl_s + l_kl_t + l2_reg + alfa_l1_reg
 
-
     def calculate_l2(self):
         l2_reg = torch.tensor(0.)
         if self.gpu:
@@ -450,6 +456,8 @@ class ResCL(NormalNN):
         if self.gpu:
             l1_reg = l1_reg.cuda()
         for param in self.model.alfa_source.items():
+            l1_reg += torch.norm(param[1], p=1)
+        for param in self.model.alfa_target.items():
             l1_reg += torch.norm(param[1], p=1)
         return l1_reg * self.lambd
 

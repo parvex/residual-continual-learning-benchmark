@@ -6,10 +6,6 @@ import copy
 
 
 class CombinedResNet(nn.Module):
-    def __init__(self):
-        self.alfa_source = None
-        self.alfa_target = None
-
     def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar, num_classes: int, gpu: bool):
         super(CombinedResNet, self).__init__()
         self.gpu = gpu
@@ -23,9 +19,8 @@ class CombinedResNet(nn.Module):
         self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
 
     def freeze_model(self, model):
-        for param in model.named_parameters():
-            layer = param[1]
-            layer.detach()
+        for param in model.parameters():
+            param.detach_()
 
     def get_alfa_empty_tensor(self, model, value, model_name):
         alfas = {}
