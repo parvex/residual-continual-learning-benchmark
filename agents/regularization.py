@@ -388,7 +388,6 @@ class ResCL(NormalNN):
         del self.criterion_fn
         self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
-        self.params = {n: p for n, p in self.target_model.named_parameters() if p.requires_grad}
         self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
@@ -396,19 +395,10 @@ class ResCL(NormalNN):
         del self.criterion_fn
         self.criterion_fn = self.combined_learn_loss
         self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'], self.gpu)
-        # ustawianie paramterow wraz z funckją, bo alfy się nie uczą, ale czy na pewno
-        model_params = {n: p for n, p in self.model.target_model.named_parameters()}
-        alfa_source_params = {'alfa_source.' + key: self.model.alfa_source[key] for key in self.model.alfa_source}
-        alfa_target_params = {'alfa_target.' + key: self.model.alfa_target[key] for key in self.model.alfa_target}
-        self.params = dict(model_params, **alfa_source_params)
-        self.params.update(alfa_target_params)
         self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         self.model = self.model.get_combined_network()
-
-        a = 1
-        print(a)
 
     # override update_model to calculate out for source and target models to calculate loss
     def update_model(self, inputs, targets, tasks):

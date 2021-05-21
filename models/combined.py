@@ -12,31 +12,32 @@ class CombinedResNet(nn.Module):
         self.source_model: PreActResNet_cifar = source_model
         self.freeze_model(self.source_model)
         self.target_model: PreActResNet_cifar = target_model
-        self.alfa_source = self.get_alfa_empty_tensor(self.source_model, -0.5, 'source')
-        self.alfa_target = self.get_alfa_empty_tensor(self.target_model, 0.5, 'target')
+        self.alfa_source = self.create_alfas(self.source_model, -0.5, 'source')
+        self.alfa_target = self.create_alfas(self.target_model, 0.5, 'target')
 
         self.combined_network = copy.deepcopy(self.target_model)
+        self.freeze_model(self.combined_network)
         self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
 
     def freeze_model(self, model):
         for param in model.parameters():
             param.detach_()
 
-    def get_alfa_empty_tensor(self, model, value, model_name):
-        alfas = {}
+    def create_alfas(self, model, value, model_name):
+        alfas = nn.ParameterDict()
         for param in model.named_parameters():
             name = param[0]
             layer = param[1]
             if self.alfa_condition(name):
                 size_of_layer = layer.shape[0]
-                alfa = torch.ones(size_of_layer) * value
+                alfa = torch.nn.Parameter(torch.ones(size_of_layer) * value)
                 last_dot_index = name.rfind('.')
                 name = name[:last_dot_index]
+                # param_name = ('alfa.' + model_name + '.' + name).replace('.', '-')
+                # self.register_parameter(param_name, alfa)
                 if self.gpu:
-                    alfa = torch.nn.Parameter(alfa.cuda())
-                    param_name = ('alfa.' + model_name + '.' + name).replace('.' , '-')
-                    self.register_parameter(param_name, alfa)
-                alfas[name] = alfa
+                    alfa.cuda()
+                alfas[name.replace('.', '-')] = alfa
         return alfas
 
     def alfa_condition(self, name):
@@ -72,25 +73,25 @@ class CombinedResNet(nn.Module):
         for i in range(len(stage_source)):
             source_layer = stage_source[i]
             target_layer = stage_target[i]
-            alfa_key = '.'.join([stage_key, str(i)])
+            alfa_key = '-'.join([stage_key, str(i)])
             out = self.forward_layers(source_layer, target_layer, out, alfa_key)
         return out
 
     def forward_layers(self, source_layer, target_layer, x, alfa_key):
-        alfa_key_bn1 = '.'.join([alfa_key, 'bn1'])
+        alfa_key_bn1 = '-'.join([alfa_key, 'bn1'])
         out = self.combine_output(source_layer.bn1(x), target_layer.bn1(x), alfa_key_bn1)
 
-        alfa_key_shortcut = '.'.join([alfa_key, 'shortcut'])
+        alfa_key_shortcut = '-'.join([alfa_key, 'shortcut'])
         shortcut = self.forward_shortcut(out, source_layer.shortcut, target_layer.shortcut,
                                          alfa_key_shortcut) if hasattr(source_layer, 'shortcut') else x
         out = F.relu(out)
 
-        alfa_key_bn2 = '.'.join([alfa_key, 'bn2'])
+        alfa_key_bn2 = '-'.join([alfa_key, 'bn2'])
         out = self.combine_output(source_layer.bn2(source_layer.conv1(out)), target_layer.bn2(target_layer.conv1(out)),
                                   alfa_key_bn2)
         out = F.relu(out)
 
-        alfa_key_conv2 = '.'.join([alfa_key, 'conv2'])
+        alfa_key_conv2 = '-'.join([alfa_key, 'conv2'])
         out = self.combine_output(source_layer.conv2(out), target_layer.conv2(out), alfa_key_conv2)
 
         out += shortcut
@@ -98,7 +99,7 @@ class CombinedResNet(nn.Module):
 
     def forward_shortcut(self, out, source_shortcut, target_shortcut, alfa_key):
         for i in range(len(source_shortcut)):
-            alfa_key_shortcut = '.'.join([alfa_key, str(i)])
+            alfa_key_shortcut = '-'.join([alfa_key, str(i)])
             out = self.combine_output(source_shortcut[i](out), target_shortcut[i](out), alfa_key_shortcut)
         return out
 
@@ -120,27 +121,27 @@ class CombinedResNet(nn.Module):
             source_layer = stage_source[i]
             target_layer = stage_target[i]
             combined_layer = stage_combined[i]
-            alfa_key = '.'.join([stage_key, str(i)])
+            alfa_key = '-'.join([stage_key, str(i)])
             self.fuse_layers(combined_layer, source_layer, target_layer, alfa_key)
 
     def fuse_layers(self, combined_layer, source_layer, target_layer, alfa_key):
-        alfa_key_bn1 = '.'.join([alfa_key, 'bn1'])
+        alfa_key_bn1 = '-'.join([alfa_key, 'bn1'])
         self.fuse_bn(combined_layer.bn1, source_layer.bn1, target_layer.bn1, alfa_key_bn1)
 
-        alfa_key_shortcut = '.'.join([alfa_key, 'shortcut'])
+        alfa_key_shortcut = '-'.join([alfa_key, 'shortcut'])
         if alfa_key_shortcut in self.alfa_source.keys():
             self.fuse_shortcut(combined_layer.shortcut, source_layer.shortcut, target_layer.shortcut, alfa_key_shortcut)
 
         # with fuse function
-        # alfa_key_conv_bn = '.'.join([alfa_key, 'bn2'])
+        # alfa_key_conv_bn = '-'.join([alfa_key, 'bn2'])
         # self.fuse_conv_bn_layer(combined_layer, source_layer, target_layer, alfa_key_conv_bn)
 
         # without fuse function
-        alfa_key_conv_bn = '.'.join([alfa_key, 'bn2'])
+        alfa_key_conv_bn = '-'.join([alfa_key, 'bn2'])
         self.fuse_conv(combined_layer.conv1, source_layer.conv1, target_layer.conv1, alfa_key_conv_bn)
         self.fuse_bn(combined_layer.bn2, source_layer.bn2, target_layer.bn2, alfa_key_conv_bn)
 
-        alfa_key_conv2 = '.'.join([alfa_key, 'conv2'])
+        alfa_key_conv2 = '-'.join([alfa_key, 'conv2'])
         self.fuse_conv(combined_layer.conv2, source_layer.conv2, target_layer.conv2, alfa_key_conv2)
 
     def fuse_bn(self, bn_combined, bn_source, bn_target, alfa_key):
@@ -157,7 +158,7 @@ class CombinedResNet(nn.Module):
 
     def fuse_shortcut(self, combined_shortcut, source_shortcut, target_shortcut, alfa_key):
         for i in range(len(combined_shortcut)):
-            alfa_key_shortcut = '.'.join([alfa_key, str(i)])
+            alfa_key_shortcut = '-'.join([alfa_key, str(i)])
             self.fuse_conv(combined_shortcut[i], source_shortcut[i], target_shortcut[i], alfa_key_shortcut)
 
     def fuse_conv(self, combined_conv, source_conv, target_conv, alfa_key):
