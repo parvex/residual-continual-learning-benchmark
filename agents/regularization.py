@@ -9,6 +9,7 @@ from torch.nn.modules.loss import _Loss
 from models.combined import CombinedResNet
 from .default import NormalNN
 import torch.nn.functional as F
+from torch.utils.data.dataloader import DataLoader
 from models import combined
 
 
@@ -352,7 +353,7 @@ class ResCL(NormalNN):
     }
     """
 
-    def __init__(self, agent_config):
+    def __init__(self, agent_config: dict):
         super(ResCL, self).__init__(agent_config)
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
         self.task_count = 0
@@ -365,7 +366,7 @@ class ResCL(NormalNN):
         self.target_pred = None
         self.split_size = agent_config['split_size']
 
-    def learn_batch(self, train_loader, val_loader=None):
+    def learn_batch(self, train_loader: DataLoader, val_loader: DataLoader = None) -> None:
 
         if self.task_count == 0:
             self.log("ResCL learning init model")
@@ -379,7 +380,7 @@ class ResCL(NormalNN):
 
         self.task_count += 1
 
-    def residual_continual_learning(self, train_loader, val_loader):
+    def residual_continual_learning(self, train_loader: DataLoader, val_loader: DataLoader) -> None:
         self.source_model = self.model
         self.target_model = copy.deepcopy(self.model)
 
@@ -401,7 +402,7 @@ class ResCL(NormalNN):
         self.model = self.model.get_combined_network()
 
     # override update_model to calculate out for source and target models to calculate loss
-    def update_model(self, inputs, targets, tasks):
+    def update_model(self, inputs: Tensor, targets: Tensor, tasks: tuple) -> tuple:
         out = self.forward(inputs)
         if self.criterion_fn == self.combined_learn_loss:
             self.source_pred = self.source_model.forward(inputs)['All'][:, :self.valid_out_dim]
@@ -421,7 +422,7 @@ class ResCL(NormalNN):
         l2_reg = self.calculate_l2()
         return l_kl + l2_reg
 
-    def combined_learn_loss(self, pred: Tensor, target: Tensor):
+    def combined_learn_loss(self, pred: Tensor, target: Tensor) -> Tensor:
         combined_source_preds = F.softmax(pred[:, :(self.valid_out_dim - self.split_size)] / 2, dim=1)
         combined_target_preds = F.softmax(pred[:, -self.split_size:] / 2, dim=1)
         source_ls_preds = F.log_softmax(self.source_pred[:, :(self.valid_out_dim - self.split_size)] / 2, dim=1)
@@ -433,7 +434,7 @@ class ResCL(NormalNN):
         alfa_l1_reg = self.calculate_alfa_l1()
         return l_kl_s + l_kl_t + l2_reg + alfa_l1_reg
 
-    def calculate_l2(self):
+    def calculate_l2(self) -> Tensor:
         l2_reg = torch.tensor(0.)
         if self.gpu:
             l2_reg = l2_reg.cuda()
@@ -441,7 +442,7 @@ class ResCL(NormalNN):
             l2_reg += torch.norm(param, p=2)
         return l2_reg * self.lambd_dec
 
-    def calculate_alfa_l1(self):
+    def calculate_alfa_l1(self) -> Tensor:
         l1_reg = torch.tensor(0.)
         if self.gpu:
             l1_reg = l1_reg.cuda()
@@ -451,6 +452,6 @@ class ResCL(NormalNN):
             l1_reg += torch.norm(param[1], p=1)
         return l1_reg * self.lambd
 
-    def move_to_device(self):
+    def move_to_device(self) -> None:
         if self.gpu:
             self.model.cuda()
