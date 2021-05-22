@@ -7,7 +7,7 @@ import copy
 
 
 class CombinedResNet(nn.Module):
-    def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar, num_classes: int, gpu: bool):
+    def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar, num_classes: int, gpu: bool, valid_out_dim: int):
         super(CombinedResNet, self).__init__()
         self.gpu = gpu
         self.source_model: PreActResNet_cifar = source_model
@@ -15,10 +15,15 @@ class CombinedResNet(nn.Module):
         self.target_model: PreActResNet_cifar = target_model
         self.alfa_source = self.create_alfas(self.source_model, -0.5, 'source')
         self.alfa_target = self.create_alfas(self.target_model, 0.5, 'target')
+        self.valid_out_dim = valid_out_dim
 
         self.combined_network = copy.deepcopy(self.target_model)
         self.freeze_model(self.combined_network)
         self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
+        #filling masked outputs with 0 to not interfere
+        with torch.no_grad():
+            self.combined_network.last['All'].weight[valid_out_dim:].fill_(0)
+            self.combined_network.last['All'].bias[valid_out_dim:].fill_(0)
 
     def freeze_model(self, model: PreActResNet_cifar) -> None:
         for param in model.parameters():

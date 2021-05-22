@@ -395,7 +395,7 @@ class ResCL(NormalNN):
         self.log("ResCL learning combined source and target model")
         del self.criterion_fn
         self.criterion_fn = self.combined_learn_loss
-        self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'], self.gpu)
+        self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'], self.gpu, self.valid_out_dim)
         self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
