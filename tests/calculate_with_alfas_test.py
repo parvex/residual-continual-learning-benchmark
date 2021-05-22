@@ -8,6 +8,8 @@ class TensorMultiplying(unittest.TestCase):
             [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
              [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]])
 
+        out = out.unsqueeze(0).repeat(128,1,1,1)
+
         alfa = torch.tensor([2.0, 3.0, 4.0])
 
         expected = torch.tensor([[[2., 4., 6.],
@@ -22,7 +24,9 @@ class TensorMultiplying(unittest.TestCase):
                                   [16., 20., 24.],
                                   [28., 32., 36.]]])
 
-        result = out * alfa[:, None, None]
+        expected = expected.unsqueeze(0).repeat(128, 1, 1, 1)
+
+        result = out * alfa[None, :, None, None]
 
         self.assertTrue(torch.equal(expected, result))
 
