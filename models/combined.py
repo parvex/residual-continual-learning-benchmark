@@ -13,23 +13,22 @@ class CombinedResNet(nn.Module):
         self.source_model: PreActResNet_cifar = source_model
         self.freeze_model(self.source_model)
         self.target_model: PreActResNet_cifar = target_model
-        self.alfa_source = self.create_alfas(self.source_model, -0.5, 'source')
-        self.alfa_target = self.create_alfas(self.target_model, 0.5, 'target')
+        self.alfa_source = self.create_alfas(self.source_model, -0.5)
+        self.alfa_target = self.create_alfas(self.target_model, 0.5)
         self.valid_out_dim = valid_out_dim
 
-        self.combined_network = copy.deepcopy(self.target_model)
-        self.freeze_model(self.combined_network)
-        self.combined_network.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
+        self.last = {}
+        self.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
         #filling masked outputs with 0 to not interfere
         with torch.no_grad():
-            self.combined_network.last['All'].weight[valid_out_dim:].fill_(0)
-            self.combined_network.last['All'].bias[valid_out_dim:].fill_(0)
+            self.last['All'].weight[valid_out_dim:].fill_(0)
+            self.last['All'].bias[valid_out_dim:].fill_(0)
 
     def freeze_model(self, model: PreActResNet_cifar) -> None:
         for param in model.parameters():
             param.detach_()
 
-    def create_alfas(self, model: PreActResNet_cifar, value: float, model_name: str) -> torch.nn.ParameterDict:
+    def create_alfas(self, model: PreActResNet_cifar, value: float) -> torch.nn.ParameterDict:
         alfas = nn.ParameterDict()
         for param in model.named_parameters():
             name = param[0]
@@ -44,7 +43,7 @@ class CombinedResNet(nn.Module):
                 alfas[name.replace('.', '-')] = alfa
         return alfas
 
-    def alfa_condition(self, name: str) -> None:
+    def alfa_condition(self, name: str) -> bool:
         return 'bn1.weight' in name or 'bn2.weight' in name or 'conv2' in name or (
                 'conv1' in name and not 'stage' in name) or 'shortcut' in name or 'bn_last.weight' in name
 
@@ -69,7 +68,7 @@ class CombinedResNet(nn.Module):
 
     def logits(self, x: Tensor) -> Tensor:
         outputs = {}
-        for task, func in self.combined_network.last.items():
+        for task, func in self.last.items():
             outputs[task] = func(x)
         return outputs
 
@@ -85,10 +84,12 @@ class CombinedResNet(nn.Module):
         alfa_key_bn1 = '-'.join([alfa_key, 'bn1'])
         out = self.combine_output(source_layer.bn1(x), target_layer.bn1(x), alfa_key_bn1)
 
+        out = F.relu(out)
+
         alfa_key_shortcut = '-'.join([alfa_key, 'shortcut'])
         shortcut = self.forward_shortcut(out, source_layer.shortcut, target_layer.shortcut,
-                                         alfa_key_shortcut) if hasattr(source_layer, 'shortcut') else x
-        out = F.relu(out)
+                                         alfa_key_shortcut) if hasattr(source_layer, 'shortcut') and hasattr(
+            target_layer, 'shortcut') else x
 
         alfa_key_bn2 = '-'.join([alfa_key, 'bn2'])
         out = self.combine_output(source_layer.bn2(source_layer.conv1(out)), target_layer.bn2(target_layer.conv1(out)),
@@ -108,6 +109,9 @@ class CombinedResNet(nn.Module):
         return out
 
     def get_combined_network(self) -> PreActResNet_cifar:
+        self.combined_network = copy.deepcopy(self.target_model)
+        self.combined_network.last['All'] = self.last['All']
+
         self.fuse_conv(self.combined_network.conv1, self.source_model.conv1, self.target_model.conv1, 'conv1')
 
         self.fuse_stage(self.combined_network.stage1, self.source_model.stage1, self.target_model.stage1, 'stage1')
