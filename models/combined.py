@@ -17,12 +17,14 @@ class CombinedResNet(nn.Module):
         self.alfa_target = self.create_alfas(self.target_model, 0.5)
         self.valid_out_dim = valid_out_dim
 
-        self.last = {}
+        self.last = nn.ModuleDict()
         self.last['All'] = nn.Linear(self.target_model.bn_last.num_features, num_classes)
         #filling masked outputs with 0 to not interfere
-        with torch.no_grad():
-            self.last['All'].weight[valid_out_dim:].fill_(0)
-            self.last['All'].bias[valid_out_dim:].fill_(0)
+        if self.gpu:
+            self.last.cuda()
+        # with torch.no_grad():
+        #     self.last['All'].weight[valid_out_dim:].fill_(0)
+        #     self.last['All'].bias[valid_out_dim:].fill_(0)
 
     def freeze_model(self, model: PreActResNet_cifar) -> None:
         for param in model.parameters():
