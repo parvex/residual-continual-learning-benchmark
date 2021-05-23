@@ -114,7 +114,7 @@ class NormalNN(nn.Module):
 
             # Summarize the performance of all tasks, or 1 task, depends on dataloader.
             # Calculated by total number of data.
-            acc = accumulate_acc(output, target, task, acc)
+            acc = self.accumulate_acc(output, target, task, acc)
 
         self.train(orig_mode)
 
@@ -187,7 +187,7 @@ class NormalNN(nn.Module):
                 target = target.detach()
 
                 # measure accuracy and record loss
-                acc = accumulate_acc(output, target, task, acc)
+                acc = self.accumulate_acc(output, target, task, acc)
                 losses.update(loss, input.size(0))
 
                 batch_time.update(batch_timer.toc())  # measure elapsed time
@@ -243,15 +243,21 @@ class NormalNN(nn.Module):
             self.model = torch.nn.DataParallel(self.model, device_ids=self.config['gpuid'], output_device=self.config['gpuid'][0])
         return self
 
-def accumulate_acc(output, target, task, meter):
-    if 'All' in output.keys(): # Single-headed model
-        meter.update(accuracy(output['All'], target), len(target))
-    else:  # outputs from multi-headed (multi-task) model
-        for t, t_out in output.items():
-            inds = [i for i in range(len(task)) if task[i] == t]  # The index of inputs that matched specific task
-            if len(inds) > 0:
-                t_out = t_out[inds]
-                t_target = target[inds]
-                meter.update(accuracy(t_out, t_target), len(inds))
+    def accumulate_acc(self, output, target, task, meter):
+        if 'All' in output.keys(): # Single-headed model
 
-    return meter
+            split_size = self.config['split_size']
+            task_num = int(task[0])
+            output2 = output['All'][:, ((task_num-1)*split_size):(task_num*split_size)]
+            target2 = target - (task_num-1) * split_size
+
+            meter.update(accuracy(output2, target2), len(target))
+        else:  # outputs from multi-headed (multi-task) model
+            for t, t_out in output.items():
+                inds = [i for i in range(len(task)) if task[i] == t]  # The index of inputs that matched specific task
+                if len(inds) > 0:
+                    t_out = t_out[inds]
+                    t_target = target[inds]
+                    meter.update(accuracy(t_out, t_target), len(inds))
+
+        return meter
