@@ -447,9 +447,9 @@ class ResCL(NormalNN):
         if self.gpu:
             l1_reg = l1_reg.cuda()
         for param in self.model.alfa_source.items():
-            l1_reg += torch.norm(param[1], p=1)
-        for param in self.model.alfa_target.items():
-            l1_reg += torch.norm(param[1], p=1)
+            alfa_source = param[1]
+            alfa_target = self.model.alfa_target[param[0]]
+            l1_reg += torch.norm(alfa_source - alfa_target, p=1)
         return l1_reg * self.lambd
 
     def move_to_device(self) -> None:
