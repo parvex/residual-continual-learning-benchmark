@@ -4,6 +4,6 @@ This is fork of https://github.com/GT-RIPL/Continual-Learning-Benchmark with imp
 
 Learning agent for ResCL was implemented in agents/regularization.py in class ResCL and combination of models in models/combined.py
 
-To run ResCL benchmark on CIFAR100 run iBatchLearn.py with this command line:
+To run ResCL benchmark on CIFAR100 with incremental task run iBatchLearn.py with this command line:
 
---dataset CIFAR100 --train_aug --gpuid 0 --repeat 1 --incremental_class --optimizer Adam  --force_out_dim 100 --no_class_remap --first_split_size 20 --other_split_size 20 --schedule 20 30 32 --batch_size 128 --model_name WideResNet_28_2_cifar --model_type resnet --agent_type customization --agent_name ResCL --lr 0.001 --reg_coef 2
+--dataset CIFAR100 --train_aug --gpuid 0 --repeat 1 --optimizer Adam    --force_out_dim 0 --first_split_size 20 --other_split_size 20 --schedule 9 11 12 --batch_size 128 --model_name WideResNet_28_2_cifar --model_type resnet --agent_type regularization --agent_name ResCL  --lr 0.001 --reg_coef 1
