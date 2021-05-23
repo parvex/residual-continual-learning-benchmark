@@ -11,6 +11,7 @@ from .default import NormalNN
 import torch.nn.functional as F
 from torch.utils.data.dataloader import DataLoader
 from models import combined
+import re
 
 
 class L2(NormalNN):
@@ -358,7 +359,7 @@ class ResCL(NormalNN):
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
         self.task_count = 0
         # self.learning_state = LearningState.INIT
-        self.lambd_dec = 0.0001
+        self.lambd_dec = 0.000001
         self.lambd = agent_config['lambd']
         self.source_model = None
         self.target_model = None
@@ -395,52 +396,89 @@ class ResCL(NormalNN):
         self.log("ResCL learning combined source and target model")
         del self.criterion_fn
         self.criterion_fn = self.combined_learn_loss
-        self.model = CombinedResNet(self.source_model, self.target_model, self.config['out_dim']['All'], self.gpu, self.valid_out_dim)
+        self.model = CombinedResNet(self.source_model, self.target_model, self.gpu)
         self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         self.model = self.model.get_combined_network()
+        self.freeze_except_last()
+        print("Fine tuning new task fully connected layer")
+        del self.criterion_fn
+        self.criterion_fn = nn.CrossEntropyLoss()
+        super(ResCL, self).learn_batch(train_loader, val_loader)
+        self.unfreeze()
+        self.log("Validation after ResCL training")
+        self.validation(val_loader)
 
     # override update_model to calculate out for source and target models to calculate loss
     def update_model(self, inputs: Tensor, targets: Tensor, tasks: tuple) -> tuple:
         out = self.forward(inputs)
         if self.criterion_fn == self.combined_learn_loss:
-            self.source_pred = self.source_model.forward(inputs)['All'][:, :self.valid_out_dim]
-            self.target_pred = self.target_model.forward(inputs)['All'][:, :self.valid_out_dim]
-
-        loss = self.criterion(out, targets, tasks)
+            source_out = self.source_model.forward(inputs)
+            target_out = self.target_model.forward(inputs)
+            loss = self.combined_criterion(out, source_out, target_out, targets, tasks)
+        else:
+            loss = self.criterion(out, targets, tasks)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         return loss.detach(), out
 
+    def combined_criterion(self, preds, source_out, target_out, targets, tasks, **kwargs):
+        # The inputs and targets could come from single task or a mix of tasks
+        # The network always makes the predictions with all its heads
+        # The criterion will match the head and task to calculate the loss.
+        if self.multihead:
+            loss = 0
+            for t,t_preds in preds.items():
+                inds = [i for i in range(len(tasks)) if tasks[i]==t]  # The index of inputs that matched specific task
+                if len(inds)>0:
+                    t_preds = t_preds[inds]
+                    t_target = targets[inds]
+                    previous_task = str(int(t) - 1)
+                    if(previous_task != '0'):
+                        self.source_pred = source_out[previous_task][inds]
+                        self.target_pred = target_out[t][inds]
+                        self.combined_source_pred = preds[previous_task][inds]
+                    loss += self.criterion_fn(t_preds, t_target) * len(inds)  # restore the loss from average
+            #loss /= len(targets)  # Average the total loss by the mini-batch size
+        else:
+            pred = preds['All']
+            if isinstance(self.valid_out_dim, int):  # (Not 'ALL') Mask out the outputs of unseen classes for incremental class scenario
+                pred = preds['All'][:,:self.valid_out_dim]
+            loss = self.criterion_fn(pred, targets)
+        return loss
+
+
     def fine_tuning_loss(self, pred: Tensor, target: Tensor) -> Tensor:
         # take few last columns (new task specific)
-        logsoftmax_preds = F.log_softmax(pred[:, -self.split_size:] / 2, dim=1)
-        target_probs = torch.nn.functional.one_hot(target).to(torch.float32)[:, -self.split_size:]
-        l_kl = F.kl_div(logsoftmax_preds, target_probs, reduction='sum') * (2 ** 2) / target.shape[0]
-        l2_reg = self.calculate_l2()
-        return l_kl + l2_reg
+        # logsoftmax_preds = F.log_softmax(pred / 2, dim=1)
+        # target_probs = torch.nn.functional.one_hot(target).to(torch.float32)
+        # l_kl = F.kl_div(logsoftmax_preds, target_probs, reduction='sum') * (2 ** 2) / target.shape[0]
+        cs_loss = F.cross_entropy(pred, target)
+        l2_reg = self.calculate_l2(self.model)
+        return cs_loss + l2_reg
 
     def combined_learn_loss(self, pred: Tensor, target: Tensor) -> Tensor:
-        combined_source_preds = F.log_softmax(pred[:, :(self.valid_out_dim - self.split_size)] / 2, dim=1)
-        combined_target_preds = F.log_softmax(pred[:, -self.split_size:] / 2, dim=1)
-        source_ls_preds = F.softmax(self.source_pred[:, :(self.valid_out_dim - self.split_size)] / 2, dim=1)
-        target_ls_preds = F.softmax(self.target_pred[:, -self.split_size:] / 2, dim=1)
+        combined_source_preds = F.log_softmax(self.combined_source_pred / 2, dim=1)
+        combined_target_preds = F.log_softmax(pred / 2, dim=1)
+        source_preds = F.softmax(self.source_pred / 2, dim=1)
+        target_preds = F.softmax(self.target_pred / 2, dim=1)
 
-        l_kl_s = F.kl_div(combined_source_preds, source_ls_preds, reduction='sum') * (2 ** 2) / target.shape[0]
-        l_kl_t = F.kl_div(combined_target_preds, target_ls_preds,  reduction='sum') * (2 ** 2) / target.shape[0]
-        l2_reg = self.calculate_l2()
+        l_kl_s = F.kl_div(combined_source_preds, source_preds, reduction='batchmean') * 4
+        l_kl_t = F.kl_div(combined_target_preds, target_preds,  reduction='batchmean') * 4
+        l2_reg = self.calculate_l2(self.target_model)
         alfa_l1_reg = self.calculate_alfa_l1()
         return l_kl_s + l_kl_t + l2_reg + alfa_l1_reg
 
-    def calculate_l2(self) -> Tensor:
+    def calculate_l2(self, model) -> Tensor:
         l2_reg = torch.tensor(0.)
         if self.gpu:
             l2_reg = l2_reg.cuda()
-        for param in self.model.parameters():
+        for param in model.parameters():
             l2_reg += torch.norm(param, p=2)
         return l2_reg ** 2 * self.lambd_dec/2
+
 
     def calculate_alfa_l1(self) -> Tensor:
         l1_reg = torch.tensor(0.)
@@ -449,9 +487,21 @@ class ResCL(NormalNN):
         for param in self.model.alfa_source.items():
             alfa_source = param[1]
             alfa_target = self.model.alfa_target[param[0]]
-            l1_reg += torch.norm(alfa_source - alfa_target, p=1)
+            l1_reg += torch.norm(alfa_target, p=1)
+            l1_reg += torch.norm(alfa_source, p=1)
         return l1_reg * self.lambd
 
     def move_to_device(self) -> None:
         if self.gpu:
             self.model.cuda()
+
+    def freeze_except_last(self):
+        for param in self.model.named_parameters():
+            if re.match(r"last.*", param[0]):
+                continue
+            param[1].requires_grad = False
+
+    def unfreeze(self):
+        for param in self.model.named_parameters():
+            param[1].requires_grad = True
+
