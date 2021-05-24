@@ -357,7 +357,7 @@ class ResCL(NormalNN):
     def __init__(self, agent_config: dict):
         super(ResCL, self).__init__(agent_config)
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
-        self.task_count = 0
+        self.task_count = 1
         # self.learning_state = LearningState.INIT
         self.lambd_dec = 0.000001
         self.lambd = agent_config['lambd']
@@ -369,7 +369,7 @@ class ResCL(NormalNN):
 
     def learn_batch(self, train_loader: DataLoader, val_loader: DataLoader = None) -> None:
 
-        if self.task_count == 0:
+        if self.task_count == 1:
             self.log("ResCL learning init model")
             # 1.Learn the parameters for 1. as normal ResNet
             del self.criterion_fn
@@ -396,8 +396,12 @@ class ResCL(NormalNN):
         self.log("ResCL learning combined source and target model")
         del self.criterion_fn
         self.criterion_fn = self.combined_learn_loss
-        self.model = CombinedResNet(self.source_model, self.target_model, self.gpu)
+        # creating combined res net from copies of source and target
+        self.model = CombinedResNet(copy.deepcopy(self.source_model), copy.deepcopy(self.target_model), self.gpu)
         self.move_to_device()
+        # freezing source and target so their predictions are always the same
+        self.freeze_model(self.source_model)
+        self.freeze_model(self.target_model)
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
         self.model = self.model.get_combined_network()
@@ -502,8 +506,13 @@ class ResCL(NormalNN):
     def freeze_except_last(self):
         for param in self.model.named_parameters():
             if re.match(r"last.*", param[0]):
+                param[1].requires_grad = True
                 continue
             param[1].requires_grad = False
+
+    def freeze_model(self, model) -> None:
+        for param in model.parameters():
+            param.detach_()
 
     def unfreeze(self):
         for param in self.model.named_parameters():
