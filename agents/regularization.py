@@ -414,9 +414,10 @@ class ResCL(NormalNN):
     def update_model(self, inputs: Tensor, targets: Tensor, tasks: tuple) -> tuple:
         out = self.forward(inputs)
         if self.criterion_fn == self.combined_learn_loss:
-            source_out = self.source_model.forward(inputs)
-            target_out = self.target_model.forward(inputs)
-            loss = self.combined_criterion(out, source_out, target_out, targets, tasks)
+            self.source_out = self.source_model.forward(inputs)
+            self.target_out = self.target_model.forward(inputs)
+            self.out = out
+            loss = self.combined_criterion(out, targets, tasks)
         else:
             loss = self.criterion(out, targets, tasks)
         self.optimizer.zero_grad()
@@ -424,7 +425,7 @@ class ResCL(NormalNN):
         self.optimizer.step()
         return loss.detach(), out
 
-    def combined_criterion(self, preds, source_out, target_out, targets, tasks, **kwargs):
+    def combined_criterion(self, preds, targets, tasks, **kwargs):
         # The inputs and targets could come from single task or a mix of tasks
         # The network always makes the predictions with all its heads
         # The criterion will match the head and task to calculate the loss.
@@ -435,11 +436,9 @@ class ResCL(NormalNN):
                 if len(inds)>0:
                     t_preds = t_preds[inds]
                     t_target = targets[inds]
-                    previous_task = str(int(t) - 1)
-                    if(previous_task != '0'):
-                        self.source_pred = source_out[previous_task][inds]
-                        self.target_pred = target_out[t][inds]
-                        self.combined_source_pred = preds[previous_task][inds]
+                    self.previous_tasks = [x for x in preds.keys() if int(x) < int(t)]
+                    self.inds = inds
+                    self.task = t
                     loss += self.criterion_fn(t_preds, t_target) * len(inds)  # restore the loss from average
             #loss /= len(targets)  # Average the total loss by the mini-batch size
         else:
@@ -460,13 +459,18 @@ class ResCL(NormalNN):
         return cs_loss + l2_reg
 
     def combined_learn_loss(self, pred: Tensor, target: Tensor) -> Tensor:
-        combined_source_preds = F.log_softmax(self.combined_source_pred / 2, dim=1)
         combined_target_preds = F.log_softmax(pred / 2, dim=1)
-        source_preds = F.softmax(self.source_pred / 2, dim=1)
-        target_preds = F.softmax(self.target_pred / 2, dim=1)
-
-        l_kl_s = F.kl_div(combined_source_preds, source_preds, reduction='batchmean') * 4
+        target_preds = F.softmax(self.target_out[self.task][self.inds] / 2, dim=1)
         l_kl_t = F.kl_div(combined_target_preds, target_preds,  reduction='batchmean') * 4
+
+        l_kl_s = torch.tensor(0.)
+        if self.gpu:
+            l_kl_s = l_kl_s.cuda()
+        for previous_task in self.previous_tasks:
+            source_preds = F.softmax(self.source_out[previous_task][self.inds] / 2, dim=1)
+            combined_source_preds = F.log_softmax(self.out[previous_task][self.inds] / 2, dim=1)
+            l_kl_s += F.kl_div(combined_source_preds, source_preds, reduction='batchmean') * 4
+
         l2_reg = self.calculate_l2(self.target_model)
         alfa_l1_reg = self.calculate_alfa_l1()
         return l_kl_s + l_kl_t + l2_reg + alfa_l1_reg
