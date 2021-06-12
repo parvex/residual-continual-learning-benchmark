@@ -12,4 +12,4 @@ python -u iBatchLearn.py --dataset CIFAR100 --train_aug --gpuid 0 --repeat 1 --o
 
 Inceremtal task results on CIFAR100:
 
-<img src="results_rescl_cifar100.png" width="640"></a>
+<img src="fig/results_rescl_cifar100.png" width="640"></a>
