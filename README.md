@@ -1,4 +1,4 @@
-# Continual-Learning-Benchmark ResCL
+# Continual-Learning-Benchmark Residual continual learning implementation
 
 This is fork of https://github.com/GT-RIPL/Continual-Learning-Benchmark with implemented residual continual learning from https://arxiv.org/abs/2002.06774. Achieved accuarcy was 77.83% on incremental task learning with CIFAR100.
 
