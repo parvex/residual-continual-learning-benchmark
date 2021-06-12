@@ -1,6 +1,6 @@
 # Continual-Learning-Benchmark ResCL
 
-This is fork of https://github.com/GT-RIPL/Continual-Learning-Benchmark with implemented ResCL
+This is fork of https://github.com/GT-RIPL/Continual-Learning-Benchmark with implemented residual continual learning from https://arxiv.org/abs/2002.06774. Achieved accuarcy was 77.83% on incremental task learning.
 
 Learning agent for ResCL was implemented in agents/regularization.py in class ResCL and combination of models in models/combined.py
 
