@@ -1,19 +1,201 @@
+import torch
 from torch import nn
-from resnet import PreActResNet_cifar
+from torch import Tensor
+from .resnet import PreActResNet_cifar
+import torch.nn.functional as F
+import copy
 
 
 class CombinedResNet(nn.Module):
-
-    def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar):
+    def __init__(self, source_model: PreActResNet_cifar, target_model: PreActResNet_cifar, gpu):
         super(CombinedResNet, self).__init__()
+        self.gpu = gpu
         self.source_model: PreActResNet_cifar = source_model
+        self.freeze_model(self.source_model)
         self.target_model: PreActResNet_cifar = target_model
-        self.alfa_source = None
-        self.alfa_target = None
-        #todo detach freezed parameters
+        self.alfa_source = self.create_alfas(self.source_model, -0.5)
+        self.alfa_target = self.create_alfas(self.target_model, 0.5)
 
-    def forward(self):
-        print("todo")
+    def freeze_model(self, model: PreActResNet_cifar) -> None:
+        for param in model.parameters():
+            param.detach_()
 
-    def get_combined_network(self):
-        print("todo")
+    def create_alfas(self, model: PreActResNet_cifar, value: float) -> torch.nn.ParameterDict:
+        alfas = nn.ParameterDict()
+        for param in model.named_parameters():
+            name = param[0]
+            layer = param[1]
+            if self.alfa_condition(name):
+                size_of_layer = layer.shape[0]
+                alfa = torch.nn.Parameter(torch.ones(size_of_layer) * value)
+                last_dot_index = name.rfind('.')
+                name = name[:last_dot_index]
+                if self.gpu:
+                    alfa.cuda()
+                alfas[name.replace('.', '-')] = alfa
+        return alfas
+
+    def alfa_condition(self, name: str) -> bool:
+        return 'bn1.weight' in name or 'bn2.weight' in name or 'conv2' in name or (
+                'conv1' in name and not 'stage' in name) or 'shortcut' in name or 'bn_last.weight' in name
+
+    def forward(self, x: Tensor) -> Tensor:
+        out = self.combine_output(self.source_model.conv1(x), self.target_model.conv1(x), 'conv1')
+
+        out = self.forward_stage(self.source_model.stage1, self.target_model.stage1, out, 'stage1')
+
+        out = self.forward_stage(self.source_model.stage2, self.target_model.stage2, out, 'stage2')
+
+        out = self.forward_stage(self.source_model.stage3, self.target_model.stage3, out, 'stage3')
+
+        out = F.relu(self.combine_output(self.source_model.bn_last(out), self.target_model.bn_last(out), 'bn_last'))
+        out = F.avg_pool2d(out, 8)
+        out = self.logits(out.view(out.size(0), -1))
+        return out
+
+    def combine_output(self, source_output: Tensor, target_output: Tensor, alfa_key: str) -> Tensor:
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        return source_output * alfa_source[None, :, None, None] + target_output * alfa_target[None, :, None, None]
+
+    def logits(self, x: Tensor) -> Tensor:
+        outputs = {}
+        for task, func in self.target_model.last.items():
+            outputs[task] = func(x)
+        return outputs
+
+    def forward_stage(self, stage_source: nn.Sequential, stage_target: nn.Sequential, out: Tensor, stage_key: str) -> Tensor:
+        for i in range(len(stage_source)):
+            source_layer = stage_source[i]
+            target_layer = stage_target[i]
+            alfa_key = '-'.join([stage_key, str(i)])
+            out = self.forward_layers(source_layer, target_layer, out, alfa_key)
+        return out
+
+    def forward_layers(self, source_layer: nn.Sequential, target_layer: nn.Sequential, x: Tensor, alfa_key: str) -> Tensor:
+        alfa_key_bn1 = '-'.join([alfa_key, 'bn1'])
+        out = self.combine_output(source_layer.bn1(x), target_layer.bn1(x), alfa_key_bn1)
+
+        out = F.relu(out)
+
+        alfa_key_shortcut = '-'.join([alfa_key, 'shortcut'])
+        shortcut = self.forward_shortcut(out, source_layer.shortcut, target_layer.shortcut,
+                                         alfa_key_shortcut) if hasattr(source_layer, 'shortcut') and hasattr(
+            target_layer, 'shortcut') else x
+
+        alfa_key_bn2 = '-'.join([alfa_key, 'bn2'])
+        out = self.combine_output(source_layer.bn2(source_layer.conv1(out)), target_layer.bn2(target_layer.conv1(out)),
+                                  alfa_key_bn2)
+        out = F.relu(out)
+
+        alfa_key_conv2 = '-'.join([alfa_key, 'conv2'])
+        out = self.combine_output(source_layer.conv2(out), target_layer.conv2(out), alfa_key_conv2)
+
+        out += shortcut
+        return out
+
+    def forward_shortcut(self, out: Tensor, source_shortcut: nn.Sequential, target_shortcut: nn.Sequential, alfa_key: str) -> Tensor:
+        for i in range(len(source_shortcut)):
+            alfa_key_shortcut = '-'.join([alfa_key, str(i)])
+            out = self.combine_output(source_shortcut[i](out), target_shortcut[i](out), alfa_key_shortcut)
+        return out
+
+    def get_combined_network(self) -> PreActResNet_cifar:
+        self.combined_network = copy.deepcopy(self.target_model)
+
+        self.fuse_conv(self.combined_network.conv1, self.source_model.conv1, self.target_model.conv1, 'conv1')
+
+        self.fuse_stage(self.combined_network.stage1, self.source_model.stage1, self.target_model.stage1, 'stage1')
+
+        self.fuse_stage(self.combined_network.stage2, self.source_model.stage2, self.target_model.stage2, 'stage2')
+
+        self.fuse_stage(self.combined_network.stage3, self.source_model.stage3, self.target_model.stage3, 'stage3')
+
+        self.fuse_bn(self.combined_network.bn_last, self.source_model.bn_last, self.target_model.bn_last, 'bn_last')
+
+        return self.combined_network
+
+    def fuse_stage(self, stage_combined: nn.Sequential, stage_source: nn.Sequential, stage_target: nn.Sequential, stage_key :str) -> None:
+        for i in range(len(stage_source)):
+            source_layer = stage_source[i]
+            target_layer = stage_target[i]
+            combined_layer = stage_combined[i]
+            alfa_key = '-'.join([stage_key, str(i)])
+            self.fuse_layers(combined_layer, source_layer, target_layer, alfa_key)
+
+    def fuse_layers(self, combined_layer: nn.Sequential, source_layer: nn.Sequential, target_layer: nn.Sequential, alfa_key: str) -> None:
+        alfa_key_bn1 = '-'.join([alfa_key, 'bn1'])
+        self.fuse_bn(combined_layer.bn1, source_layer.bn1, target_layer.bn1, alfa_key_bn1)
+
+        alfa_key_shortcut = '-'.join([alfa_key, 'shortcut'])
+        if alfa_key_shortcut in self.alfa_source.keys():
+            self.fuse_shortcut(combined_layer.shortcut, source_layer.shortcut, target_layer.shortcut, alfa_key_shortcut)
+
+        # with fuse function
+        # alfa_key_conv_bn = '-'.join([alfa_key, 'bn2'])
+        # self.fuse_conv_bn_layer(combined_layer, source_layer, target_layer, alfa_key_conv_bn)
+
+        # without fuse function
+        alfa_key_conv_bn = '-'.join([alfa_key, 'bn2'])
+        self.fuse_conv(combined_layer.conv1, source_layer.conv1, target_layer.conv1, alfa_key_conv_bn)
+        self.fuse_bn(combined_layer.bn2, source_layer.bn2, target_layer.bn2, alfa_key_conv_bn)
+
+        alfa_key_conv2 = '-'.join([alfa_key, 'conv2'])
+        self.fuse_conv(combined_layer.conv2, source_layer.conv2, target_layer.conv2, alfa_key_conv2)
+
+    def fuse_bn(self, bn_combined: nn.BatchNorm2d, bn_source: nn.BatchNorm2d, bn_target: nn.BatchNorm2d, alfa_key: str) -> None:
+        new_weight = self.combine_weights_bn(bn_source.weight, bn_target.weight, alfa_key)
+        bn_combined.weight = nn.Parameter(new_weight)
+        new_bias = self.combine_weights_bn(bn_source.bias, bn_target.bias, alfa_key)
+        bn_combined.bias = nn.Parameter(new_bias)
+
+    def combine_weights_bn(self, source_weight: Tensor, target_weight: Tensor, alfa_key: str) -> Tensor:
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        result = source_weight * alfa_source + target_weight * alfa_target
+        return result
+
+    def fuse_shortcut(self, combined_shortcut: nn.Sequential, source_shortcut: nn.Sequential, target_shortcut: nn.Sequential, alfa_key: str) -> None:
+        for i in range(len(combined_shortcut)):
+            alfa_key_shortcut = '-'.join([alfa_key, str(i)])
+            self.fuse_conv(combined_shortcut[i], source_shortcut[i], target_shortcut[i], alfa_key_shortcut)
+
+    def fuse_conv(self, combined_conv: nn.Conv2d, source_conv: nn.Conv2d, target_conv: nn.Conv2d, alfa_key: str) -> None:
+        new_weight = self.combine_weights_conv(source_conv.weight, target_conv.weight, alfa_key)
+        combined_conv.weight = nn.Parameter(new_weight)
+
+    def combine_weights_conv(self, source_weight: Tensor, target_weight: Tensor, alfa_key: str) -> Tensor:
+        alfa_source = self.alfa_source[alfa_key] + 1
+        alfa_target = self.alfa_target[alfa_key]
+        result = source_weight * alfa_source[:, None, None, None] + target_weight * alfa_target[:, None, None, None]
+        return result
+
+    def fuse_conv_bn_layer(self, combined_layer: nn.Sequential, source_layer: nn.Sequential, target_layer: nn.Sequential, alfa_key: str) -> None:
+        new_source_conv = self.fuse(source_layer.conv1, source_layer.bn2)
+        new_target_conv = self.fuse(target_layer.conv1, target_layer.bn2)
+
+        self.fuse_conv(combined_layer.conv1, new_source_conv, new_target_conv, alfa_key)
+        combined_layer.bn2 = nn.BatchNorm2d(source_layer.num_features)
+
+    @staticmethod
+    def fuse(conv: nn.Conv2d, bn: nn.BatchNorm2d) -> nn.Conv2d:
+        w = conv.weight
+        mean = bn.running_mean
+        var_sqrt = torch.sqrt(bn.running_var + bn.eps)
+        beta = bn.weight
+        gamma = bn.bias
+        if conv.bias is not None:
+            b = conv.bias
+        else:
+            b = mean.new_zeros(mean.shape)
+        w = w * (beta / var_sqrt).reshape([conv.out_channels, 1, 1, 1])
+        b = (b - mean) / var_sqrt * beta + gamma
+        fused_conv = nn.Conv2d(conv.in_channels,
+                               conv.out_channels,
+                               conv.kernel_size,
+                               conv.stride,
+                               conv.padding,
+                               bias=True)
+        fused_conv.weight = nn.Parameter(w)
+        fused_conv.bias = nn.Parameter(b)
+        return fused_conv

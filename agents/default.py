@@ -32,7 +32,7 @@ class NormalNN(nn.Module):
         else:
             self.gpu = False
         self.init_optimizer()
-        self.reset_optimizer = False
+        self.reset_optimizer = True
         self.valid_out_dim = 'ALL'  # Default: 'ALL' means all output nodes are active
                                     # Set a interger here for the incremental class scenario
 

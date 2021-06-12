@@ -1,14 +1,18 @@
 import copy
 from enum import Enum
-
+from torch.autograd import Variable
 import torch
 import random
 import torch.nn as nn
-
+from torch import Tensor
+from torch.nn.modules.loss import _Loss
 from models.combined import CombinedResNet
 from .default import NormalNN
 import torch.nn.functional as F
+from torch.utils.data.dataloader import DataLoader
 from models import combined
+import re
+
 
 class L2(NormalNN):
     """
@@ -20,13 +24,14 @@ class L2(NormalNN):
         url={https://arxiv.org/abs/1612.00796}
     }
     """
+
     def __init__(self, agent_config):
         super(L2, self).__init__(agent_config)
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
         self.regularization_terms = {}
         self.task_count = 0
         self.online_reg = True  # True: There will be only one importance matrix and previous model parameters
-                                # False: Each task has its own importance matrix and model parameters
+        # False: Each task has its own importance matrix and model parameters
 
     def calculate_importance(self, dataloader):
         # Use an identity importance so it is an L2 regularization.
@@ -52,20 +57,20 @@ class L2(NormalNN):
 
         # Save the weight and importance of weights of current task
         self.task_count += 1
-        if self.online_reg and len(self.regularization_terms)>0:
+        if self.online_reg and len(self.regularization_terms) > 0:
             # Always use only one slot in self.regularization_terms
-            self.regularization_terms[1] = {'importance':importance, 'task_param':task_param}
+            self.regularization_terms[1] = {'importance': importance, 'task_param': task_param}
         else:
             # Use a new slot to store the task-specific information
-            self.regularization_terms[self.task_count] = {'importance':importance, 'task_param':task_param}
+            self.regularization_terms[self.task_count] = {'importance': importance, 'task_param': task_param}
 
     def criterion(self, inputs, targets, tasks, regularization=True, **kwargs):
         loss = super(L2, self).criterion(inputs, targets, tasks, **kwargs)
 
-        if regularization and len(self.regularization_terms)>0:
+        if regularization and len(self.regularization_terms) > 0:
             # Calculate the reg_loss only when the regularization_terms exists
             reg_loss = 0
-            for i,reg_term in self.regularization_terms.items():
+            for i, reg_term in self.regularization_terms.items():
                 task_reg_loss = 0
                 importance = reg_term['importance']
                 task_param = reg_term['task_param']
@@ -100,7 +105,7 @@ class EWC(L2):
         self.log('Computing EWC')
 
         # Initialize the importance matrix
-        if self.online_reg and len(self.regularization_terms)>0:
+        if self.online_reg and len(self.regularization_terms) > 0:
             importance = self.regularization_terms[1]['importance']
         else:
             importance = {}
@@ -111,7 +116,7 @@ class EWC(L2):
         # Otherwise it uses mini-batches for the estimation. This speeds up the process a lot with similar performance.
         if self.n_fisher_sample is not None:
             n_sample = min(self.n_fisher_sample, len(dataloader.dataset))
-            self.log('Sample',self.n_fisher_sample,'for estimating the F matrix.')
+            self.log('Sample', self.n_fisher_sample, 'for estimating the F matrix.')
             rand_ind = random.sample(list(range(len(dataloader.dataset))), n_sample)
             subdata = torch.utils.data.Subset(dataloader.dataset, rand_ind)
             dataloader = torch.utils.data.DataLoader(subdata, shuffle=True, num_workers=2, batch_size=1)
@@ -136,7 +141,8 @@ class EWC(L2):
             # The flag self.valid_out_dim is for handling the case of incremental class learning.
             # if self.valid_out_dim is an integer, it means only the first 'self.valid_out_dim' dimensions are used
             # in calculating the loss.
-            pred = preds[task_name] if not isinstance(self.valid_out_dim, int) else preds[task_name][:,:self.valid_out_dim]
+            pred = preds[task_name] if not isinstance(self.valid_out_dim, int) else preds[task_name][:,
+                                                                                    :self.valid_out_dim]
             ind = pred.max(1)[1].flatten()  # Choose the one with max
 
             # - Alternative ind by multinomial sampling. Its performance is similar. -
@@ -191,7 +197,7 @@ class SI(L2):
     def update_model(self, inputs, targets, tasks):
 
         unreg_gradients = {}
-        
+
         # 1.Save current parameters
         old_params = {}
         for n, p in self.params.items():
@@ -250,10 +256,10 @@ class SI(L2):
 
     def calculate_importance(self, dataloader):
         self.log('Computing SI')
-        assert self.online_reg,'SI needs online_reg=True'
+        assert self.online_reg, 'SI needs online_reg=True'
 
         # Initialize the importance matrix
-        if len(self.regularization_terms)>0: # The case of after the first task
+        if len(self.regularization_terms) > 0:  # The case of after the first task
             importance = self.regularization_terms[1]['importance']
             prev_params = self.regularization_terms[1]['task_param']
         else:  # It is in the first task
@@ -265,7 +271,7 @@ class SI(L2):
         # Calculate or accumulate the Omega (the importance matrix)
         for n, p in importance.items():
             delta_theta = self.params[n].detach() - prev_params[n]
-            p += self.w[n]/(delta_theta**2 + self.damping_factor)
+            p += self.w[n] / (delta_theta ** 2 + self.damping_factor)
             self.w[n].zero_()
 
         return importance
@@ -290,7 +296,7 @@ class MAS(L2):
         self.log('Computing MAS')
 
         # Initialize the importance matrix
-        if self.online_reg and len(self.regularization_terms)>0:
+        if self.online_reg and len(self.regularization_terms) > 0:
             importance = self.regularization_terms[1]['importance']
         else:
             importance = {}
@@ -317,7 +323,8 @@ class MAS(L2):
             # The flag self.valid_out_dim is for handling the case of incremental class learning.
             # if self.valid_out_dim is an integer, it means only the first 'self.valid_out_dim' dimensions are used
             # in calculating the  loss.
-            pred = preds[task_name] if not isinstance(self.valid_out_dim, int) else preds[task_name][:,:self.valid_out_dim]
+            pred = preds[task_name] if not isinstance(self.valid_out_dim, int) else preds[task_name][:,
+                                                                                    :self.valid_out_dim]
 
             pred.pow_(2)
             loss = pred.mean()
@@ -331,6 +338,7 @@ class MAS(L2):
         self.train(mode=mode)
 
         return importance
+
 
 #################################ZZSN
 
@@ -346,49 +354,167 @@ class ResCL(NormalNN):
     }
     """
 
-
-    def __init__(self, agent_config):
+    def __init__(self, agent_config: dict):
         super(ResCL, self).__init__(agent_config)
         self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}  # For convenience
-        self.task_count = 0
-        self.learning_state = LearningState.INIT
-        self.lambd_dec = 0.0001
+        self.task_count = 1
+        # self.learning_state = LearningState.INIT
+        self.lambd_dec = 0.000001
         self.lambd = agent_config['lambd']
         self.source_model = None
         self.target_model = None
+        self.source_pred = None
+        self.target_pred = None
+        self.split_size = agent_config['split_size']
 
-    def learn_batch(self, train_loader, val_loader=None):
+    def learn_batch(self, train_loader: DataLoader, val_loader: DataLoader = None) -> None:
 
-        if(self.task_count == 0):
+        if self.task_count == 1:
+            self.log("ResCL learning init model")
             # 1.Learn the parameters for 1. as normal ResNet
+            del self.criterion_fn
+            self.criterion_fn = nn.CrossEntropyLoss()
             super(ResCL, self).learn_batch(train_loader, val_loader)
         else:
             # Residual Continual Learning algorithm
             self.residual_continual_learning(train_loader, val_loader)
 
-    def residual_continual_learning(self, train_loader, val_loader):
+        self.task_count += 1
+
+    def residual_continual_learning(self, train_loader: DataLoader, val_loader: DataLoader) -> None:
         self.source_model = self.model
         self.target_model = copy.deepcopy(self.model)
 
-        # Now target_model will be fine tuned se learning model is changed
+        # Now target_model will be fine tuned so learning model is changed
+        self.log("ResCL fine tuning target model")
+        del self.criterion_fn
         self.criterion_fn = self.fine_tuning_loss
         self.model = self.target_model
+        self.move_to_device()
         super(ResCL, self).learn_batch(train_loader, val_loader)
 
+        self.log("ResCL learning combined source and target model")
+        del self.criterion_fn
         self.criterion_fn = self.combined_learn_loss
-        #todo
-        self.model = CombinedResNet(self.source_model, self.target_model)
-
+        # creating combined res net from copies of source and target
+        self.model = CombinedResNet(copy.deepcopy(self.source_model), copy.deepcopy(self.target_model), self.gpu)
+        self.move_to_device()
+        # freezing source and target so their predictions are always the same
+        self.freeze_model(self.source_model)
+        self.freeze_model(self.target_model)
         super(ResCL, self).learn_batch(train_loader, val_loader)
+
         self.model = self.model.get_combined_network()
+        self.freeze_except_last()
+        print("Fine tuning new task fully connected layer")
+        del self.criterion_fn
+        self.criterion_fn = nn.CrossEntropyLoss()
+        super(ResCL, self).learn_batch(train_loader, val_loader)
+        self.unfreeze()
+        self.log("Validation after ResCL training")
+        self.validation(val_loader)
 
-    def fine_tuning_loss(self, inputs, target):
-        temp_logsoftmax_inputs = F.log_softmax(inputs/2)
-        l_kl = F.kl_div(target, temp_logsoftmax_inputs, reduction='none') * (2**2) / target.shape[0]
-        norm = 0
+    # override update_model to calculate out for source and target models to calculate loss
+    def update_model(self, inputs: Tensor, targets: Tensor, tasks: tuple) -> tuple:
+        out = self.forward(inputs)
+        if self.criterion_fn == self.combined_learn_loss:
+            self.source_out = self.source_model.forward(inputs)
+            self.target_out = self.target_model.forward(inputs)
+            self.out = out
+            loss = self.combined_criterion(out, targets, tasks)
+        else:
+            loss = self.criterion(out, targets, tasks)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        return loss.detach(), out
+
+    def combined_criterion(self, preds, targets, tasks, **kwargs):
+        # The inputs and targets could come from single task or a mix of tasks
+        # The network always makes the predictions with all its heads
+        # The criterion will match the head and task to calculate the loss.
+        if self.multihead:
+            loss = 0
+            for t,t_preds in preds.items():
+                inds = [i for i in range(len(tasks)) if tasks[i]==t]  # The index of inputs that matched specific task
+                if len(inds)>0:
+                    t_preds = t_preds[inds]
+                    t_target = targets[inds]
+                    self.previous_tasks = [x for x in preds.keys() if int(x) < int(t)]
+                    self.inds = inds
+                    self.task = t
+                    loss += self.criterion_fn(t_preds, t_target) * len(inds)  # restore the loss from average
+            #loss /= len(targets)  # Average the total loss by the mini-batch size
+        else:
+            pred = preds['All']
+            if isinstance(self.valid_out_dim, int):  # (Not 'ALL') Mask out the outputs of unseen classes for incremental class scenario
+                pred = preds['All'][:,:self.valid_out_dim]
+            loss = self.criterion_fn(pred, targets)
+        return loss
+
+
+    def fine_tuning_loss(self, pred: Tensor, target: Tensor) -> Tensor:
+        # take few last columns (new task specific)
+        # logsoftmax_preds = F.log_softmax(pred / 2, dim=1)
+        # target_probs = torch.nn.functional.one_hot(target).to(torch.float32)
+        # l_kl = F.kl_div(logsoftmax_preds, target_probs, reduction='sum') * (2 ** 2) / target.shape[0]
+        cs_loss = F.cross_entropy(pred, target)
+        l2_reg = self.calculate_l2(self.model)
+        return cs_loss + l2_reg
+
+    def combined_learn_loss(self, pred: Tensor, target: Tensor) -> Tensor:
+        combined_target_preds = F.log_softmax(pred / 2, dim=1)
+        target_preds = F.softmax(self.target_out[self.task][self.inds] / 2, dim=1)
+        l_kl_t = F.kl_div(combined_target_preds, target_preds,  reduction='batchmean') * 4
+
+        l_kl_s = torch.tensor(0.)
+        if self.gpu:
+            l_kl_s = l_kl_s.cuda()
+        for previous_task in self.previous_tasks:
+            source_preds = F.softmax(self.source_out[previous_task][self.inds] / 2, dim=1)
+            combined_source_preds = F.log_softmax(self.out[previous_task][self.inds] / 2, dim=1)
+            l_kl_s += F.kl_div(combined_source_preds, source_preds, reduction='batchmean') * 4
+
+        l2_reg = self.calculate_l2(self.target_model)
+        alfa_l1_reg = self.calculate_alfa_l1()
+        return l_kl_s + l_kl_t + l2_reg + alfa_l1_reg
+
+    def calculate_l2(self, model) -> Tensor:
+        l2_reg = torch.tensor(0.)
+        if self.gpu:
+            l2_reg = l2_reg.cuda()
+        for param in model.parameters():
+            l2_reg += torch.norm(param, p=2)
+        return l2_reg ** 2 * self.lambd_dec/2
+
+
+    def calculate_alfa_l1(self) -> Tensor:
+        l1_reg = torch.tensor(0.)
+        if self.gpu:
+            l1_reg = l1_reg.cuda()
+        for param in self.model.alfa_source.items():
+            alfa_source = param[1]
+            alfa_target = self.model.alfa_target[param[0]]
+            l1_reg += torch.norm(alfa_target, p=1)
+            l1_reg += torch.norm(alfa_source, p=1)
+        return l1_reg * self.lambd
+
+    def move_to_device(self) -> None:
+        if self.gpu:
+            self.model.cuda()
+
+    def freeze_except_last(self):
         for param in self.model.named_parameters():
-            norm += torch.norm(param, p=2) ** 2
-        return l_kl + norm * self.lambd_dec / 2
+            if re.match(r"last.*", param[0]):
+                param[1].requires_grad = True
+                continue
+            param[1].requires_grad = False
 
-    def combined_learn_loss(self, inputs, target):
-        print('todo')
+    def freeze_model(self, model) -> None:
+        for param in model.parameters():
+            param.detach_()
+
+    def unfreeze(self):
+        for param in self.model.named_parameters():
+            param[1].requires_grad = True
+
